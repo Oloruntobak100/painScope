@@ -1,0 +1,172 @@
+/* App-specific styles */
+
+/* Smooth page transitions */
+.page-transition-enter {
+  opacity: 0;
+  transform: translateY(20px);
+}
+
+.page-transition-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 200ms ease-in-out, transform 200ms ease-in-out;
+}
+
+.page-transition-exit {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.page-transition-exit-active {
+  opacity: 0;
+  transform: translateY(-20px);
+  transition: opacity 200ms ease-in-out, transform 200ms ease-in-out;
+}
+
+/* Custom button styles - sci-fi theme */
+.btn-primary {
+  @apply px-6 py-3 font-semibold rounded-lg transition-all duration-200;
+  background: linear-gradient(135deg, #00f5d4 0%, #00d4aa 100%);
+  color: #050508;
+}
+
+.btn-primary:hover {
+  box-shadow: 0 0 20px rgba(0, 245, 212, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  @apply px-6 py-3 font-medium rounded-lg border transition-all duration-200;
+  background: hsl(225 15% 12%);
+  color: hsl(0 0% 98%);
+  border-color: hsl(225 15% 15%);
+}
+
+.btn-secondary:hover {
+  background: hsl(225 10% 15%);
+  border-color: rgba(0, 245, 212, 0.3);
+}
+
+/* Card hover effects */
+.card-hover {
+  @apply transition-all duration-300;
+}
+
+.card-hover:hover {
+  border-color: rgba(0, 245, 212, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(0, 245, 212, 0.1);
+}
+
+/* Input focus styles */
+.input-focus {
+  @apply transition-all duration-200;
+}
+
+.input-focus:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 245, 212, 0.3);
+  border-color: rgba(0, 245, 212, 0.5);
+}
+
+/* Terminal text effect */
+.terminal-text {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #00f5d4;
+}
+
+/* Scan line effect */
+.scan-line {
+  position: relative;
+  overflow: hidden;
+}
+
+.scan-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0, 245, 212, 0.8), transparent);
+  animation: scan 2s linear infinite;
+}
+
+@keyframes scan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
+}
+
+/* Progress bar animation */
+.progress-bar-animated {
+  background: linear-gradient(90deg, #00f5d4 0%, #a855f7 50%, #00f5d4 100%);
+  background-size: 200% 100%;
+  animation: progress-shine 2s linear infinite;
+}
+
+@keyframes progress-shine {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Sparkline animation */
+.sparkline-path {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: draw-sparkline 1s ease-out forwards;
+}
+
+@keyframes draw-sparkline {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Glass morphism enhancement */
+.glass-enhanced {
+  background: rgba(10, 12, 20, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(0, 245, 212, 0.1);
+}
+
+/* Noise texture overlay */
+.noise-overlay::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.02;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Responsive typography */
+@media (max-width: 768px) {
+  .responsive-heading {
+    font-size: 1.5rem;
+  }
+  
+  .responsive-text {
+    font-size: 0.875rem;
+  }
+}
+
+/* Mobile touch improvements */
+@media (pointer: coarse) {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
