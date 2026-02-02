@@ -37,21 +37,29 @@ export async function persistReportAndPainsToSupabase(
     ? (raw.aiStructuredData as Record<string, unknown>)
     : {};
 
-  const { data: reportRow, error: reportErr } = await sb
-    .from('reports')
-    .insert({
-      user_id: userId,
-      briefing_id: briefingId || null,
-      pain_count: painCount,
-      avg_pain_score: avgPainScore,
-      top_pain: topPain,
-      comprehensive_report: comprehensiveReport,
-      dashboard_metrics: dashboardMetrics,
-      structured_data: structuredData,
-    })
-    .select('id')
-    .single();
-
+  const painSnapshot = Array.isArray(pains) ? pains : [];
+  let reportRow: { id?: string } | null = null;
+  let reportErr: { code?: string; message?: string } | null = null;
+  const reportPayload = {
+    user_id: userId,
+    briefing_id: briefingId || null,
+    pain_count: painCount,
+    avg_pain_score: avgPainScore,
+    top_pain: topPain,
+    comprehensive_report: comprehensiveReport,
+    dashboard_metrics: dashboardMetrics,
+    structured_data: structuredData,
+    pain_snapshot: painSnapshot,
+  };
+  const res = await sb.from('reports').insert(reportPayload).select('id').single();
+  reportRow = res.data as { id?: string } | null;
+  reportErr = res.error as { code?: string; message?: string } | null;
+  if (reportErr && (reportErr.code === '42703' || (reportErr.message ?? '').includes('pain_snapshot'))) {
+    const { pain_snapshot: _, ...rest } = reportPayload;
+    const res2 = await sb.from('reports').insert(rest).select('id').single();
+    reportRow = res2.data as { id?: string } | null;
+    reportErr = res2.error as { code?: string; message?: string } | null;
+  }
   if (reportErr || !reportRow?.id) {
     console.error('[PainScope] Failed to insert report:', reportErr);
     return;
@@ -138,14 +146,27 @@ export async function persistReportAndPainsToSupabase(
   }
 }
 
-/** Load report history for UI (Dashboard, Pain Library sidebar) */
+/** Load report history for current user (Dashboard, Pain Library metrics) */
 export async function loadReportHistory(userId: string): Promise<ReportHistory[]> {
   if (!isSupabaseConfigured() || !userId) return [];
-  const { data: rows, error } = await supabase!
+  let rows: Record<string, unknown>[] | null = null;
+  let error: { code?: string; message?: string } | null = null;
+  const res1 = await supabase!
     .from('reports')
-    .select('id, created_at, pain_count, avg_pain_score, top_pain, comprehensive_report, dashboard_metrics, structured_data')
+    .select('id, created_at, pain_count, avg_pain_score, top_pain, comprehensive_report, dashboard_metrics, structured_data, pain_snapshot')
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
+  rows = (res1.data ?? null) as Record<string, unknown>[] | null;
+  error = (res1.error ?? null) as { code?: string; message?: string } | null;
+  if (error && (error.code === '42703' || (error.message ?? '').includes('pain_snapshot'))) {
+    const res2 = await supabase!
+      .from('reports')
+      .select('id, created_at, pain_count, avg_pain_score, top_pain, comprehensive_report, dashboard_metrics, structured_data')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    rows = (res2.data ?? null) as Record<string, unknown>[] | null;
+    error = (res2.error ?? null) as { code?: string; message?: string } | null;
+  }
   if (error) {
     console.error('[PainScope] loadReportHistory error:', error);
     return [];
@@ -159,5 +180,59 @@ export async function loadReportHistory(userId: string): Promise<ReportHistory[]
     topPain: (r.top_pain as string) ?? undefined,
     comprehensiveReport: (r.comprehensive_report as string) ?? undefined,
     structuredData: (r.structured_data as Record<string, unknown>) ?? undefined,
+    painSnapshot: Array.isArray((r as { pain_snapshot?: unknown }).pain_snapshot) ? ((r as { pain_snapshot: Record<string, unknown>[] }).pain_snapshot) : undefined,
   }));
+}
+
+/** Load all reports for admin (Report History sidebar) with user name/email */
+export async function loadAllReportsForAdmin(): Promise<ReportHistory[]> {
+  if (!isSupabaseConfigured()) return [];
+  let rows: Record<string, unknown>[] | null = null;
+  let error: { code?: string; message?: string } | null = null;
+  const res1 = await supabase!
+    .from('reports')
+    .select('id, user_id, created_at, pain_count, avg_pain_score, top_pain, comprehensive_report, dashboard_metrics, structured_data, pain_snapshot')
+    .order('created_at', { ascending: false });
+  rows = (res1.data ?? null) as Record<string, unknown>[] | null;
+  error = (res1.error ?? null) as { code?: string; message?: string } | null;
+  if (error && (error.code === '42703' || (error.message ?? '').includes('pain_snapshot'))) {
+    const res2 = await supabase!
+      .from('reports')
+      .select('id, user_id, created_at, pain_count, avg_pain_score, top_pain, comprehensive_report, dashboard_metrics, structured_data')
+      .order('created_at', { ascending: false });
+    rows = (res2.data ?? null) as Record<string, unknown>[] | null;
+    error = (res2.error ?? null) as { code?: string; message?: string } | null;
+  }
+  if (error) {
+    console.error('[PainScope] loadAllReportsForAdmin error:', error);
+    return [];
+  }
+  if (!rows?.length) return [];
+  const userIds = [...new Set((rows as { user_id?: string }[]).map((r) => r.user_id).filter(Boolean))] as string[];
+  const { data: profiles } = await supabase!
+    .from('profiles')
+    .select('id, name, email')
+    .in('id', userIds);
+  const byId = new Map<string | undefined, { name?: string; email?: string }>();
+  (profiles ?? []).forEach((p: { id?: string; name?: string; email?: string }) => {
+    byId.set(p.id, { name: p.name, email: p.email });
+  });
+  return rows.map((r) => {
+    const profile = byId.get((r as { user_id?: string }).user_id);
+    const painSnap = (r as { pain_snapshot?: unknown }).pain_snapshot;
+    return {
+      id: r.id as string,
+      timestamp: new Date((r.created_at as string) ?? Date.now()),
+      dashboardMetrics: (r.dashboard_metrics as WebhookDashboardMetrics) ?? {},
+      painCount: Number(r.pain_count) ?? 0,
+      avgPainScore: Number(r.avg_pain_score) ?? 0,
+      topPain: (r.top_pain as string) ?? undefined,
+      comprehensiveReport: (r.comprehensive_report as string) ?? undefined,
+      structuredData: (r.structured_data as Record<string, unknown>) ?? undefined,
+      painSnapshot: Array.isArray(painSnap) ? (painSnap as Record<string, unknown>[]) : undefined,
+      userId: (r as { user_id?: string }).user_id,
+      userName: profile?.name ?? 'Unknown',
+      userEmail: profile?.email ?? '',
+    };
+  });
 }

@@ -161,6 +161,12 @@ export interface ReportHistory {
   comprehensiveReport?: string;
   /** Structured insights: marketGaps, quickWins, rawMetrics, etc. */
   structuredData?: Record<string, unknown>;
+  /** Full pain list for Pain Library after reload (from reports.pain_snapshot) */
+  painSnapshot?: Record<string, unknown>[];
+  /** Admin only: who generated this report */
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
 }
 
 // API Response Types

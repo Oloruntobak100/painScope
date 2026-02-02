@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS public.reports (
   top_pain text,
   comprehensive_report text,
   dashboard_metrics jsonb DEFAULT '{}',
-  structured_data jsonb DEFAULT '{}'
+  structured_data jsonb DEFAULT '{}',
+  pain_snapshot jsonb DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON public.reports(user_id);
@@ -49,3 +50,6 @@ BEGIN
   END IF;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+
+-- 3. pain_snapshot: store full pain list for Pain Library after reload (add if missing)
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS pain_snapshot jsonb DEFAULT '[]';

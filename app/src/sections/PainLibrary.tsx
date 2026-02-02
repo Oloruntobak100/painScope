@@ -42,7 +42,7 @@ import {
 } from '@/components/ui/select';
 import { useAuthStore, usePainLibraryStore, useBriefingStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { loadReportHistory } from '@/lib/reportSupabase';
+import { loadReportHistory, loadAllReportsForAdmin } from '@/lib/reportSupabase';
 import type { PainArchetype, PainSource } from '@/types';
 
 function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[]): PainArchetype {
@@ -173,16 +173,36 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
   const [fullReportContent, setFullReportContent] = useState<string | null>(null);
   const itemsPerPage = 10;
   const { user } = useAuthStore();
-  const { researchResult, setResearchResult, reportHistory, setReportHistory } = useBriefingStore();
+  const { researchResult, setResearchResult, reportHistory, setReportHistory, setDashboardFromReport } = useBriefingStore();
   const { setPains: setStorePains } = usePainLibraryStore();
+  const [adminReportList, setAdminReportList] = useState<typeof reportHistory>([]);
 
-  // Hydrate report history from Supabase when empty (e.g. direct nav to Library)
+  // Hydrate report history: always load current user's reports (for Library snapshot + Dashboard); admin also loads all for sidebar
   useEffect(() => {
-    if (!isSupabaseConfigured() || !user?.id || reportHistory.length > 0) return;
-    loadReportHistory(user.id).then((entries) => {
-      if (entries.length > 0) setReportHistory(entries);
-    });
-  }, [user?.id, reportHistory.length, setReportHistory]);
+    if (!isSupabaseConfigured() || !user?.id) return;
+    if (user.role === 'admin') {
+      loadAllReportsForAdmin().then((entries) => setAdminReportList(entries));
+    }
+    if (reportHistory.length === 0) {
+      loadReportHistory(user.id).then((entries) => {
+        if (entries.length > 0) {
+          setReportHistory(entries);
+          setDashboardFromReport(entries[0]);
+        }
+      });
+    }
+  }, [user?.id, user?.role, reportHistory.length, setReportHistory, setDashboardFromReport]);
+
+  // When pains are empty but we have current user's latest report painSnapshot, show it (persist after reload)
+  useEffect(() => {
+    if (pains.length > 0) return;
+    const latest = reportHistory[0];
+    const snapshot = latest?.painSnapshot;
+    if (!Array.isArray(snapshot) || snapshot.length === 0) return;
+    const normalized = snapshot.map((p) => normalizePainArchetype(p));
+    setPains(normalized);
+    setStorePains(normalized);
+  }, [pains.length, reportHistory, setStorePains]);
 
   const fetchPains = useCallback(async () => {
     if (!isSupabaseConfigured() || !user) return;
@@ -362,12 +382,12 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
               </button>
             </div>
             <div className="p-3 space-y-2">
-              {reportHistory.length === 0 ? (
+              {(user?.role === 'admin' ? adminReportList : reportHistory).length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground text-sm">
                   No reports yet. Complete a briefing to generate your first report.
                 </div>
               ) : (
-                reportHistory.map((report) => (
+                (user?.role === 'admin' ? adminReportList : reportHistory).map((report) => (
                   <button
                     key={report.id}
                     onClick={() => setSelectedReport(selectedReport === report.id ? null : report.id)}
@@ -383,6 +403,9 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
                         {report.painCount} pains
                       </Badge>
                     </div>
+                    {user?.role === 'admin' && (report.userName || report.userEmail) && (
+                      <p className="text-xs text-muted-foreground mb-1">By: {report.userName || report.userEmail}</p>
+                    )}
                     <p className="text-sm font-medium mb-1">{report.topPain || 'Market Research'}</p>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>Avg Score: {report.avgPainScore}</span>
