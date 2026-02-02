@@ -226,19 +226,36 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       return { success: false, error: 'No pending verification' };
     }
     set({ isLoading: true });
-    const { data, error } = await supabase.auth.verifyOtp({
-      email: pendingVerification,
-      token: code,
-      type: 'email',
-    });
-    set({ isLoading: false });
-    if (error) return { success: false, error: error.message };
-    if (data?.user) {
-      const { data: profile } = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
-      set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true, pendingVerification: null });
-      return { success: true };
+    try {
+      const token = String(code).trim();
+      // Try 'email' first (standard OTP); some Confirm signup flows use 'signup'
+      let result = await supabase.auth.verifyOtp({
+        email: pendingVerification,
+        token,
+        type: 'email',
+      });
+      if (result.error && result.data == null) {
+        const trySignup = await supabase.auth.verifyOtp({
+          email: pendingVerification,
+          token,
+          type: 'signup',
+        });
+        if (!trySignup.error) result = trySignup;
+      }
+      const { data, error } = result;
+      if (error) return { success: false, error: error.message };
+      if (data?.user) {
+        const { data: profile } = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
+        set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true, pendingVerification: null });
+        return { success: true };
+      }
+      return { success: false, error: 'Verification failed' };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Verification failed';
+      return { success: false, error: message };
+    } finally {
+      set({ isLoading: false });
     }
-    return { success: false, error: 'Verification failed' };
   },
 
   resendVerification: async (email) => {
