@@ -51,6 +51,7 @@ interface AuthStore extends AuthState {
   listUsersForAdmin: () => Promise<Array<{ id: string; email: string; name: string; company?: string; industry?: string; role: UserRole; is_locked: boolean }>>;
 }
 
+// Full profiles schema: run supabase-profiles-admin.sql once so these columns exist
 const PROFILE_SELECT = 'name, company, industry, avatar, role, email, is_locked';
 
 function mapSupabaseUser(
@@ -89,39 +90,41 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       return;
     }
 
-    const applySession = (session: { user: SupabaseUser } | null) => {
-      if (!session?.user) return;
+    const applySession = (session: { user: SupabaseUser } | null): Promise<void> => {
+      if (!session?.user) return Promise.resolve();
       const mappedNoProfile = () => mapSupabaseUser(session.user);
-      supabase
-        .from('profiles')
-        .select(PROFILE_SELECT)
-        .eq('id', session.user.id)
-        .single()
-        .then(({ data }) => {
-          const mapped = mapSupabaseUser(session.user, data);
-          if (mapped.isLocked) {
-            void supabase.auth.signOut();
-            set({ user: null, isAuthenticated: false });
-            return;
-          }
-          set({ user: mapped, isAuthenticated: true });
-        })
-        .then(undefined, () => {
-          const mapped = mappedNoProfile();
-          if (mapped.isLocked) {
-            void supabase.auth.signOut();
-            set({ user: null, isAuthenticated: false });
-            return;
-          }
-          set({ user: mapped, isAuthenticated: true });
-        });
+      return new Promise((resolve) => {
+        supabase
+          .from('profiles')
+          .select(PROFILE_SELECT)
+          .eq('id', session.user.id)
+          .single()
+          .then(({ data }) => {
+            const mapped = mapSupabaseUser(session.user, data);
+            if (mapped.isLocked) {
+              void supabase.auth.signOut();
+              set({ user: null, isAuthenticated: false });
+            } else {
+              set({ user: mapped, isAuthenticated: true });
+            }
+            resolve();
+          })
+          .then(undefined, () => {
+            const mapped = mappedNoProfile();
+            if (mapped.isLocked) {
+              void supabase.auth.signOut();
+              set({ user: null, isAuthenticated: false });
+            } else {
+              set({ user: mapped, isAuthenticated: true });
+            }
+            resolve();
+          });
+      });
     };
 
     void supabase.auth
       .getSession()
-      .then(({ data: { session } }) => {
-        applySession(session);
-      })
+      .then(({ data: { session } }) => applySession(session))
       .then(
         () => set({ isInitialized: true }),
         () => set({ isInitialized: true })
