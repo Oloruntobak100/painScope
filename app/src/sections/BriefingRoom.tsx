@@ -356,10 +356,8 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
             onClick={() => onNavigate('dashboard')}
             className="flex items-center gap-3"
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime to-lime-light flex items-center justify-center">
-              <span className="text-background font-bold">PS</span>
-            </div>
-            <span className="font-semibold text-lg hidden lg:block">PainScope AI</span>
+<img src="/favicon.svg" alt="PainScope AI" className="w-10 h-10 rounded-xl flex-shrink-0" />
+              <span className="font-semibold text-lg hidden lg:block">PainScope AI</span>
           </button>
         </div>
         <nav className="p-3">

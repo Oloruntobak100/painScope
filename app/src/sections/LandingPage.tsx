@@ -77,9 +77,7 @@ export default function LandingPage({ onGetStarted, onSignIn }: LandingPageProps
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.5 }}
             >
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-lime to-lime-light flex items-center justify-center">
-                <span className="text-background font-bold text-sm">PS</span>
-              </div>
+              <img src="/favicon.svg" alt="PainScope AI" className="w-8 h-8 rounded-lg flex-shrink-0" />
               <span className="font-semibold text-lg">PainScope AI</span>
             </motion.div>
 
@@ -339,9 +337,7 @@ export default function LandingPage({ onGetStarted, onSignIn }: LandingPageProps
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-lime to-lime-light flex items-center justify-center">
-                <span className="text-background font-bold text-sm">PS</span>
-              </div>
+              <img src="/favicon.svg" alt="PainScope AI" className="w-8 h-8 rounded-lg flex-shrink-0" />
               <span className="font-semibold">PainScope AI</span>
             </div>
             <div className="flex items-center gap-6 text-sm text-muted-foreground">

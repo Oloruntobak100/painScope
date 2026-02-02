@@ -165,12 +165,10 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
         className="fixed left-0 top-0 bottom-0 z-40 bg-sidebar border-r border-sidebar-border"
       >
         <div className="h-full flex flex-col">
-          {/* Logo */}
+          {/* Logo - same as landing / favicon */}
           <div className="h-16 flex items-center px-4 border-b border-sidebar-border">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime to-lime-light flex items-center justify-center flex-shrink-0">
-                <span className="text-background font-bold">PS</span>
-              </div>
+              <img src="/favicon.svg" alt="PainScope AI" className="w-10 h-10 rounded-xl flex-shrink-0" />
               {sidebarOpen && (
                 <motion.span
                   initial={{ opacity: 0 }}
