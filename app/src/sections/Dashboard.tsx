@@ -15,18 +15,19 @@ import {
   Target,
   Zap,
   ArrowRight,
+  Database,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useAuthStore } from '@/store/authStore';
-import { useAgentStore, usePainLibraryStore } from '@/store';
+import { useAgentStore, usePainLibraryStore, useBriefingStore, useUIStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { Notification } from '@/store';
 
 interface DashboardProps {
-  onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings') => void;
+  onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings', queryParams?: Record<string, string>) => void;
   currentRoute: string;
 }
 
@@ -71,55 +72,76 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [stats, setStats] = useState({ totalPains: 0, avgPainScore: 0, activeAgents: 0, sourcesAnalyzed: 0 });
-  const [recentPains, setRecentPains] = useState<Array<{ name: string; score: number; trend: number[]; source: string }>>([]);
+  const [recentPains, setRecentPains] = useState<Array<{ id?: string; name: string; score: number; trend: number[]; source: string }>>([]);
   const { user, logout } = useAuthStore();
   const { agents } = useAgentStore();
   const { pains } = usePainLibraryStore();
+  const { dashboardMetrics, recentDiscoveries, reportHistory } = useBriefingStore();
+  const { notifications: uiNotifications, markNotificationRead, markAllNotificationsRead } = useUIStore();
+
+  // Prefer webhook dashboard data when available
+  useEffect(() => {
+    if (dashboardMetrics) {
+      setStats({
+        totalPains: dashboardMetrics.totalPainsDiscovered ?? 0,
+        avgPainScore: dashboardMetrics.averagePainScore ?? 0,
+        activeAgents: dashboardMetrics.activeAgents ?? 0,
+        sourcesAnalyzed: dashboardMetrics.sourcesAnalyzed ?? 0,
+      });
+    }
+  }, [dashboardMetrics]);
 
   useEffect(() => {
-    if (!isSupabaseConfigured() || !user) {
-      setStats({ totalPains: pains.length || 12, avgPainScore: 73, activeAgents: agents.filter(a => a.status === 'running').length, sourcesAnalyzed: 2847 });
-      setRecentPains([
-        { name: 'Payment friction in B2B invoices', score: 87, trend: [45, 52, 48, 61, 72, 87], source: 'Reddit' },
-        { name: 'Lack of real-time collaboration', score: 76, trend: [30, 35, 42, 55, 68, 76], source: 'Twitter' },
-        { name: 'Complex onboarding flows', score: 71, trend: [25, 32, 38, 45, 58, 71], source: 'G2 Reviews' },
-        { name: 'Limited API documentation', score: 68, trend: [20, 28, 35, 42, 55, 68], source: 'Stack Overflow' },
-      ]);
-      return;
-    }
-    (async () => {
-      const { count: painCount } = await supabase.from('pain_archetypes').select('*', { count: 'exact', head: true }).eq('user_id', user.id);
-      const { data: painRows } = await supabase.from('pain_archetypes').select('pain_score, name').eq('user_id', user.id).order('pain_score', { ascending: false }).limit(5);
-      const { count: agentCount } = await supabase.from('agent_jobs').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('status', 'running');
-      const total = painCount ?? 0;
-      const avg = painRows?.length ? Math.round(painRows.reduce((s, p) => s + (Number(p.pain_score) ?? 0), 0) / painRows.length) : 0;
-      const recent = (painRows ?? []).map((p, i) => ({
-        name: (p.name as string) ?? 'Pain',
-        score: Number(p.pain_score) ?? 0,
-        trend: [40 + i * 10, 50 + i * 8, 55 + i * 6, 60 + i * 5, 65 + i * 4, Number(p.pain_score) ?? 70],
-        source: 'Discovery',
+    if (recentDiscoveries && recentDiscoveries.length > 0) {
+      const mapped = recentDiscoveries.slice(0, 6).map((d: any) => ({
+        id: d.id,
+        name: d.archetype ?? d.name,
+        score: d.painScore,
+        trend: d.trend ?? [d.painScore * 0.5, d.painScore * 0.6, d.painScore * 0.7, d.painScore * 0.8, d.painScore * 0.9, d.painScore],
+        source: d.topSource?.name ?? d.source ?? 'Discovery',
       }));
-      setStats({ totalPains: total, avgPainScore: avg || 73, activeAgents: agentCount ?? 0, sourcesAnalyzed: 2847 });
-      setRecentPains(recent.length ? recent : [
-        { name: 'Payment friction in B2B invoices', score: 87, trend: [45, 52, 48, 61, 72, 87], source: 'Reddit' },
-        { name: 'Lack of real-time collaboration', score: 76, trend: [30, 35, 42, 55, 68, 76], source: 'Twitter' },
-        { name: 'Complex onboarding flows', score: 71, trend: [25, 32, 38, 45, 58, 71], source: 'G2 Reviews' },
-        { name: 'Limited API documentation', score: 68, trend: [20, 28, 35, 42, 55, 68], source: 'Stack Overflow' },
-      ]);
-    })();
-  }, [user, pains.length, agents]);
+      setRecentPains(mapped);
+    }
+  }, [recentDiscoveries]);
 
+  useEffect(() => {
+    // Only load from Supabase if configured and we don't have webhook data
+    if (!dashboardMetrics && !recentDiscoveries?.length) {
+      if (isSupabaseConfigured() && user) {
+        (async () => {
+          const { count: painCount } = await supabase.from('pain_archetypes').select('*', { count: 'exact', head: true }).eq('user_id', user.id);
+          const { data: painRows } = await supabase.from('pain_archetypes').select('pain_score, name').eq('user_id', user.id).order('pain_score', { ascending: false }).limit(5);
+          const { count: agentCount } = await supabase.from('agent_jobs').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('status', 'running');
+          const total = painCount ?? 0;
+          const avg = painRows?.length ? Math.round(painRows.reduce((s, p) => s + (Number(p.pain_score) ?? 0), 0) / painRows.length) : 0;
+          const recent = (painRows ?? []).map((p, i) => ({
+            name: (p.name as string) ?? 'Pain',
+            score: Number(p.pain_score) ?? 0,
+            trend: [40 + i * 10, 50 + i * 8, 55 + i * 6, 60 + i * 5, 65 + i * 4, Number(p.pain_score) ?? 70],
+            source: 'Discovery',
+          }));
+          if (total > 0) {
+            setStats({ totalPains: total, avgPainScore: avg, activeAgents: agentCount ?? 0, sourcesAnalyzed: 0 });
+            setRecentPains(recent);
+          }
+        })();
+      }
+    }
+  }, [user, dashboardMetrics, recentDiscoveries]);
+
+  // Use webhook data first, then Supabase data, then show zeros
   const activeAgents = stats.activeAgents || agents.filter(a => a.status === 'running').length;
-  const totalPains = stats.totalPains || pains.length || 12;
-  const avgPainScore = stats.avgPainScore || 73;
-  const sourcesAnalyzed = stats.sourcesAnalyzed || 2847;
+  const totalPains = stats.totalPains || pains.length || 0;
+  const avgPainScore = stats.avgPainScore || 0;
+  const sourcesAnalyzed = stats.sourcesAnalyzed || 0;
 
   const handleLogout = () => {
     logout();
     onNavigate('landing');
   };
 
-  const unreadCount = mockNotifications.filter(n => !n.read).length;
+  const notifications = uiNotifications.length > 0 ? uiNotifications : mockNotifications;
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -231,33 +253,65 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 10 }}
-                    className="absolute right-0 top-full mt-2 w-80 glass rounded-xl border border-border shadow-xl z-50"
+                    className="absolute right-0 top-full mt-2 w-96 glass rounded-xl border border-border shadow-xl z-50 overflow-hidden"
                   >
-                    <div className="p-4 border-b border-border">
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-semibold">Notifications</h3>
-                        <button className="text-xs text-lime hover:underline">Mark all read</button>
-                      </div>
+                    <div className="p-4 border-b border-border flex items-center justify-between">
+                      <h3 className="font-semibold">Notifications</h3>
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => markAllNotificationsRead()}
+                          className="text-xs text-lime hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      )}
                     </div>
                     <div className="max-h-80 overflow-y-auto">
-                      {mockNotifications.map((notification) => (
+                      {notifications.map((notification) => (
                         <div
                           key={notification.id}
-                          className={`p-4 border-b border-border hover:bg-white/5 transition-colors cursor-pointer ${
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => !notification.read && markNotificationRead(notification.id)}
+                          onKeyDown={(e) => e.key === 'Enter' && !notification.read && markNotificationRead(notification.id)}
+                          className={`p-4 border-b border-border last:border-b-0 hover:bg-white/5 transition-colors cursor-pointer ${
                             !notification.read ? 'bg-lime/5' : ''
                           }`}
                         >
                           <div className="flex items-start gap-3">
-                            <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${
-                              notification.type === 'success' ? 'bg-green-500' :
-                              notification.type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
-                            }`} />
-                            <div>
+                            <div
+                              className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${
+                                notification.type === 'success'
+                                  ? 'bg-green-500'
+                                  : notification.type === 'warning'
+                                    ? 'bg-amber-500'
+                                    : notification.type === 'error'
+                                      ? 'bg-red-500'
+                                      : 'bg-blue-500'
+                              }`}
+                            />
+                            <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium">{notification.title}</p>
-                              <p className="text-xs text-muted-foreground mt-1">{notification.message}</p>
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{notification.message}</p>
                               <p className="text-xs text-muted-foreground mt-2">
                                 {new Date(notification.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </p>
+                              {notification.type === 'warning' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="mt-2 text-lime hover:text-lime-light text-xs h-7"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onNavigate('library');
+                                    setNotificationsOpen(false);
+                                  }}
+                                >
+                                  View All
+                                  <ArrowRight className="w-3 h-3 ml-1" />
+                                </Button>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -389,7 +443,7 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
                   <span className="text-xs text-muted-foreground">Active</span>
                 </div>
               </div>
-              <p className="text-2xl font-bold">{activeAgents || 2}</p>
+              <p className="text-2xl font-bold">{activeAgents}</p>
               <p className="text-sm text-muted-foreground">Active Agents</p>
             </motion.div>
 
@@ -435,37 +489,52 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
               </div>
 
               <div className="space-y-4">
-                {recentPains.map((pain, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-4 p-4 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors cursor-pointer"
-                    onClick={() => onNavigate('library')}
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="font-medium">{pain.name}</h3>
-                        <Badge variant="secondary" className="text-xs">{pain.source}</Badge>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="flex-1 max-w-[200px]">
-                          <div className="h-8 flex items-end gap-0.5">
-                            {pain.trend.map((value, i) => (
-                              <div
-                                key={i}
-                                className="flex-1 bg-lime/60 rounded-sm"
-                                style={{ height: `${value}%` }}
-                              />
-                            ))}
+                {recentPains.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Search className="w-12 h-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+                    <p className="text-muted-foreground mb-4">No pain discoveries yet</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onNavigate('briefing')}
+                    >
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Start Your First Briefing
+                    </Button>
+                  </div>
+                ) : (
+                  recentPains.map((pain, index) => (
+                    <div
+                      key={pain.id ?? index}
+                      className="flex items-center gap-4 p-4 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors cursor-pointer"
+                      onClick={() => pain.id ? onNavigate('library', { painId: pain.id }) : onNavigate('library')}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="font-medium">{pain.name}</h3>
+                          <Badge variant="secondary" className="text-xs">{pain.source}</Badge>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1 max-w-[200px]">
+                            <div className="h-8 flex items-end gap-0.5">
+                              {pain.trend.map((value, i) => (
+                                <div
+                                  key={i}
+                                  className="flex-1 bg-lime/60 rounded-sm"
+                                  style={{ height: `${value}%` }}
+                                />
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-bold text-lime">{pain.score}</p>
+                        <p className="text-xs text-muted-foreground">PainScore</p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold text-lime">{pain.score}</p>
-                      <p className="text-xs text-muted-foreground">PainScore</p>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </motion.div>
 
@@ -476,6 +545,31 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
               transition={{ delay: 0.6 }}
               className="space-y-6"
             >
+              {/* Latest report - View full report */}
+              {reportHistory.length > 0 && reportHistory[0].comprehensiveReport && (
+                <div className="glass rounded-xl p-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-lg bg-lime/10 flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-lime" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold">Latest Report</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {reportHistory[0].painCount} pains • Avg score {reportHistory[0].avgPainScore}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="w-full border-lime text-lime hover:bg-lime/10"
+                    onClick={() => onNavigate('library', { report: 'full' })}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    View Full Report
+                  </Button>
+                </div>
+              )}
+
               {/* Launch Scout */}
               <div className="glass rounded-xl p-6">
                 <div className="flex items-center gap-3 mb-4">
@@ -500,19 +594,21 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
               <div className="glass rounded-xl p-6">
                 <h3 className="font-semibold mb-4">Active Agents</h3>
                 <div className="space-y-3">
-                  {[
-                    { name: 'Fintech Scout', progress: 67, task: 'Analyzing Reddit...' },
-                    { name: 'SaaS Monitor', progress: 34, task: 'Crawling G2...' },
-                  ].map((agent, index) => (
-                    <div key={index} className="p-3 rounded-lg bg-secondary/30">
+                  {activeAgents > 0 ? (
+                    <div className="p-3 rounded-lg bg-secondary/30">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium">{agent.name}</span>
-                        <span className="text-xs text-lime">{agent.progress}%</span>
+                        <span className="text-sm font-medium">Market Scout</span>
+                        <span className="text-xs text-lime">Active</span>
                       </div>
-                      <Progress value={agent.progress} className="h-1.5 mb-2" />
-                      <p className="text-xs text-muted-foreground font-mono">{agent.task}</p>
+                      <Progress value={75} className="h-1.5 mb-2" />
+                      <p className="text-xs text-muted-foreground font-mono">Analyzing sources...</p>
                     </div>
-                  ))}
+                  ) : (
+                    <div className="text-center py-4 text-muted-foreground text-sm">
+                      <p>No active agents</p>
+                      <p className="text-xs mt-1">Start a briefing to deploy scouts</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>

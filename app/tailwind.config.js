@@ -15,6 +15,15 @@ module.exports = {
           dark: "#00d4aa",
           light: "#00fff0",
         },
+        lime: {
+          DEFAULT: "#00d4aa",
+          light: "#34d399",
+        },
+        /* Deep green for primary action buttons (Save, Submit) so they stay visible */
+        actionGreen: {
+          DEFAULT: "#059669",
+          hover: "#047857",
+        },
         purple: {
           DEFAULT: "#a855f7",
           dark: "#7c3aed",

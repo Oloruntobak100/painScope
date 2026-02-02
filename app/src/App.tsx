@@ -21,9 +21,10 @@ type AppRoute = PublicRoute | 'dashboard' | 'briefing' | 'scout' | 'library' | '
 const PROTECTED_ROUTES: AppRoute[] = ['dashboard', 'briefing', 'scout', 'library', 'settings'];
 
 function getInitialRoute(): AppRoute {
-  const hash = window.location.hash.slice(1) || 'landing';
+  const raw = window.location.hash.slice(1) || 'landing';
+  const path = raw.split('?')[0];
   const valid: AppRoute[] = ['landing', 'how-it-works', 'pricing', 'contact', 'privacy', 'terms', 'dashboard', 'briefing', 'scout', 'library', 'settings'];
-  return valid.includes(hash as AppRoute) ? (hash as AppRoute) : 'landing';
+  return valid.includes(path as AppRoute) ? (path as AppRoute) : 'landing';
 }
 
 function App() {
@@ -52,16 +53,21 @@ function App() {
     }
   }, [isAuthenticated, currentRoute]);
 
-  // Redirect authenticated users from landing to app
+  // Redirect authenticated users from landing to app only when URL has a hash
+  // (and never on local dev so we always see the homepage at localhost/127.0.0.1)
   useEffect(() => {
-    if (isAuthenticated && currentRoute === 'landing') {
+    const isLocalDev =
+      window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocalDev) return;
+    const hash = window.location.hash.slice(1);
+    if (isAuthenticated && currentRoute === 'landing' && hash) {
       const targetRoute = user?.industry ? 'dashboard' : 'briefing';
       setCurrentRoute(targetRoute);
       window.location.hash = targetRoute;
     }
   }, [isAuthenticated, currentRoute, user?.industry]);
 
-  const navigate = (route: string) => {
+  const navigate = (route: string, queryParams?: Record<string, string>) => {
     const r = route as AppRoute;
     if (PROTECTED_ROUTES.includes(r) && !isAuthenticated) {
       setAuthMode('signin');
@@ -69,7 +75,10 @@ function App() {
       return;
     }
     setCurrentRoute(r);
-    window.location.hash = r === 'landing' ? '' : r;
+    const query = queryParams && Object.keys(queryParams).length > 0
+      ? '?' + new URLSearchParams(queryParams).toString()
+      : '';
+    window.location.hash = r === 'landing' ? '' : r + query;
     window.scrollTo(0, 0);
   };
 

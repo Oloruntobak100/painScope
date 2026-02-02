@@ -20,6 +20,8 @@ import {
   X,
   Zap,
   Building2,
+  BarChart3,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,7 +40,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useAuthStore, usePainLibraryStore } from '@/store';
+import { useAuthStore, usePainLibraryStore, useBriefingStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { PainArchetype, PainSource } from '@/types';
 
@@ -68,105 +70,85 @@ function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[
   };
 }
 
+/** Normalize webhook pain item (may use camelCase/snake_case, string dates) to PainArchetype */
+function normalizePainArchetype(p: Record<string, unknown>): PainArchetype {
+  const id = (p.id as string) ?? `pain-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  
+  // Handle both sources array and topSource object from n8n
+  let sources: PainSource[] = [];
+  if (Array.isArray(p.sources)) {
+    sources = (p.sources as Record<string, unknown>[]).map((s, i) => ({
+      id: (s.id as string) ?? `s-${i}`,
+      url: (s.url as string) ?? '',
+      title: (s.title as string) ?? '',
+      platform: ((s.platform as string) ?? 'forum') as PainSource['platform'],
+      snippet: (s.snippet as string) ?? '',
+      sentiment: ((s.sentiment as string) ?? 'neutral') as PainSource['sentiment'],
+      date: s.date ? new Date(s.date as string | number) : new Date(),
+    }));
+  } else if (p.topSource && typeof p.topSource === 'object') {
+    const ts = p.topSource as Record<string, unknown>;
+    sources = [{
+      id: 's-0',
+      url: (ts.url as string) ?? '',
+      title: (ts.title as string) ?? (ts.name as string) ?? '',
+      platform: ((ts.name as string)?.toLowerCase() === 'web' ? 'forum' : (ts.name as string)?.toLowerCase() === 'news' ? 'news' : 'forum') as PainSource['platform'],
+      snippet: (p.description as string) ?? '',
+      sentiment: 'negative' as const,
+      date: p.timestamp ? new Date(p.timestamp as string) : new Date(),
+    }];
+  }
+  
+  // Handle revenuePotential from n8n (estimate/raw/label only; no tam/sam/som - derive to avoid NaN)
+  const rev = (p.revenuePotential ?? p.revenue_potential) as Record<string, unknown> | undefined;
+  const revRaw = rev?.raw != null ? Number(rev.raw) : (rev?.estimatedARR ?? rev?.estimated_arr != null ? Number(rev.estimatedARR ?? rev.estimated_arr) : 0);
+  const revNum = Number.isFinite(revRaw) ? revRaw : 0;
+  const tam = Number(rev?.tam);
+  const sam = Number(rev?.sam);
+  const som = Number(rev?.som);
+  const conf = Number(rev?.confidence);
+
+  const tags = Array.isArray(p.tags) ? (p.tags as string[]) : [];
+  const hist = Array.isArray(p.frequencyHistory)
+    ? (p.frequencyHistory as number[])
+    : Array.isArray(p.frequency_history)
+      ? (p.frequency_history as number[])
+      : [];
+  
+  const painScore = Number(p.painScore ?? p.pain_score) ?? 0;
+  
+  return {
+    id,
+    name: (p.archetype as string) ?? (p.name as string) ?? '',
+    description: (p.description as string) ?? '',
+    painScore,
+    severity: Number(p.severity) ?? 0,
+    frequency: Number(p.frequency) ?? 0,
+    urgency: Number(p.urgency) ?? 0,
+    competitiveSaturation: Number(p.competitiveSaturation ?? p.competitive_saturation) ?? 0,
+    sources,
+    revenuePotential: {
+      tam: Number.isFinite(tam) ? tam : revNum * 10,
+      sam: Number.isFinite(sam) ? sam : revNum * 2.5,
+      som: Number.isFinite(som) ? som : revNum * 0.5,
+      estimatedARR: revNum,
+      confidence: Number.isFinite(conf) ? conf : 0.7,
+    },
+    tags,
+    createdAt: p.createdAt || p.created_at || p.timestamp ? new Date((p.createdAt ?? p.created_at ?? p.timestamp) as string | number) : new Date(),
+    frequencyHistory: hist.length ? hist : [painScore * 0.5, painScore * 0.6, painScore * 0.7, painScore * 0.8, painScore * 0.9, painScore],
+    opportunityNote: typeof p.opportunityNote === 'string' ? p.opportunityNote : undefined,
+    existingSolutions: typeof p.existingSolutions === 'string' ? p.existingSolutions : undefined,
+    quotes: Array.isArray(p.quotes) ? (p.quotes as string[]) : undefined,
+  };
+}
+
 interface PainLibraryProps {
   onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings') => void;
   currentRoute: string;
 }
 
-// Mock data for the library
-const mockPains: PainArchetype[] = [
-  {
-    id: 'pain-1',
-    name: 'Payment friction in B2B invoices',
-    description: 'Businesses struggle with manual invoice processing, delayed payments, and lack of visibility into payment status.',
-    painScore: 87,
-    severity: 8.5,
-    frequency: 7.2,
-    urgency: 8.0,
-    competitiveSaturation: 2.1,
-    sources: [
-      { id: 's1', url: 'https://reddit.com/r/fintech/comments/abc123', title: 'Invoice pain points discussion', platform: 'reddit', snippet: 'We spend 20 hours a week just processing invoices manually. There has to be a better way...', sentiment: 'negative', date: new Date('2025-01-28') },
-      { id: 's2', url: 'https://twitter.com/user/status/123', title: 'B2B payment rant', platform: 'twitter', snippet: 'Why is paying vendors still so hard in 2025? Every platform has a different process.', sentiment: 'negative', date: new Date('2025-01-27') },
-      { id: 's3', url: 'https://linkedin.com/posts/abc', title: 'CFO insights', platform: 'linkedin', snippet: 'Cash flow visibility remains the #1 challenge for finance teams.', sentiment: 'negative', date: new Date('2025-01-26') },
-    ],
-    revenuePotential: { tam: 50000000000, sam: 12000000000, som: 500000000, estimatedARR: 25000000, confidence: 0.78 },
-    tags: ['payments', 'b2b', 'invoicing', 'automation', 'fintech'],
-    createdAt: new Date('2025-01-28'),
-    frequencyHistory: [45, 52, 48, 61, 72, 87],
-  },
-  {
-    id: 'pain-2',
-    name: 'Lack of real-time collaboration',
-    description: 'Remote teams need better tools for synchronous document editing and decision-making.',
-    painScore: 76,
-    severity: 7.8,
-    frequency: 8.5,
-    urgency: 6.5,
-    competitiveSaturation: 4.2,
-    sources: [
-      { id: 's4', url: 'https://news.ycombinator.com/item?id=123', title: 'Collaboration tools discussion', platform: 'forum', snippet: 'Still waiting for the perfect real-time collaboration tool that actually works.', sentiment: 'negative', date: new Date('2025-01-27') },
-      { id: 's5', url: 'https://g2.com/reviews/collab-tool', title: 'User review', platform: 'review', snippet: 'Great features but latency issues make real-time collaboration frustrating.', sentiment: 'negative', date: new Date('2025-01-25') },
-    ],
-    revenuePotential: { tam: 35000000000, sam: 8000000000, som: 300000000, estimatedARR: 15000000, confidence: 0.65 },
-    tags: ['collaboration', 'remote-work', 'productivity', 'saas'],
-    createdAt: new Date('2025-01-27'),
-    frequencyHistory: [30, 35, 42, 55, 68, 76],
-  },
-  {
-    id: 'pain-3',
-    name: 'Complex onboarding flows',
-    description: 'Users abandon products due to lengthy and confusing onboarding experiences.',
-    painScore: 71,
-    severity: 7.2,
-    frequency: 6.8,
-    urgency: 7.5,
-    competitiveSaturation: 3.5,
-    sources: [
-      { id: 's6', url: 'https://g2.com/reviews/saas-product', title: 'User review', platform: 'review', snippet: 'Great product but onboarding took way too long. Almost gave up.', sentiment: 'negative', date: new Date('2025-01-26') },
-      { id: 's7', url: 'https://twitter.com/user/status/456', title: 'Onboarding complaint', platform: 'twitter', snippet: 'Why do I need to watch 10 videos before I can use the product?', sentiment: 'negative', date: new Date('2025-01-25') },
-    ],
-    revenuePotential: { tam: 20000000000, sam: 5000000000, som: 200000000, estimatedARR: 10000000, confidence: 0.72 },
-    tags: ['onboarding', 'ux', 'retention', 'product-led'],
-    createdAt: new Date('2025-01-26'),
-    frequencyHistory: [25, 32, 38, 45, 58, 71],
-  },
-  {
-    id: 'pain-4',
-    name: 'Limited API documentation',
-    description: 'Developers struggle with incomplete or outdated API documentation.',
-    painScore: 68,
-    severity: 6.5,
-    frequency: 7.5,
-    urgency: 6.8,
-    competitiveSaturation: 2.8,
-    sources: [
-      { id: 's8', url: 'https://stackoverflow.com/questions/123', title: 'API confusion', platform: 'forum', snippet: 'The docs say one thing but the API does another. Anyone else experiencing this?', sentiment: 'negative', date: new Date('2025-01-25') },
-      { id: 's9', url: 'https://reddit.com/r/webdev/comments/def', title: 'Documentation rant', platform: 'reddit', snippet: 'Why is API documentation always an afterthought?', sentiment: 'negative', date: new Date('2025-01-24') },
-    ],
-    revenuePotential: { tam: 15000000000, sam: 4000000000, som: 150000000, estimatedARR: 8000000, confidence: 0.68 },
-    tags: ['api', 'developer-experience', 'documentation', 'devtools'],
-    createdAt: new Date('2025-01-25'),
-    frequencyHistory: [20, 28, 35, 42, 55, 68],
-  },
-  {
-    id: 'pain-5',
-    name: 'Data silos between departments',
-    description: 'Teams struggle with fragmented data across different tools and systems.',
-    painScore: 82,
-    severity: 8.0,
-    frequency: 7.8,
-    urgency: 7.5,
-    competitiveSaturation: 3.2,
-    sources: [
-      { id: 's10', url: 'https://linkedin.com/posts/data-silos', title: 'Data integration challenges', platform: 'linkedin', snippet: 'Breaking down data silos remains the biggest challenge for enterprise analytics.', sentiment: 'negative', date: new Date('2025-01-28') },
-      { id: 's11', url: 'https://news.ycombinator.com/item?id=789', title: 'Integration discussion', platform: 'forum', snippet: 'Every team uses different tools and nothing talks to each other.', sentiment: 'negative', date: new Date('2025-01-27') },
-    ],
-    revenuePotential: { tam: 45000000000, sam: 10000000000, som: 400000000, estimatedARR: 20000000, confidence: 0.75 },
-    tags: ['data', 'integration', 'enterprise', 'analytics'],
-    createdAt: new Date('2025-01-28'),
-    frequencyHistory: [40, 48, 55, 62, 73, 82],
-  },
-];
+// No mock data - only display real webhook data
 
 const platformIcons: Record<string, React.ElementType> = {
   reddit: MessageSquare,
@@ -182,9 +164,14 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
   const [sortBy, setSortBy] = useState<'painScore' | 'frequency' | 'date'>('painScore');
   const [selectedPain, setSelectedPain] = useState<PainArchetype | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [pains, setPains] = useState<PainArchetype[]>(mockPains);
+  const [pains, setPains] = useState<PainArchetype[]>([]);
+  const [reportSidebarOpen, setReportSidebarOpen] = useState(false);
+  const [selectedReport, setSelectedReport] = useState<string | null>(null);
+  const [fullReportOpen, setFullReportOpen] = useState(false);
+  const [fullReportContent, setFullReportContent] = useState<string | null>(null);
   const itemsPerPage = 10;
   const { user } = useAuthStore();
+  const { researchResult, setResearchResult, reportHistory } = useBriefingStore();
   const { setPains: setStorePains } = usePainLibraryStore();
 
   const fetchPains = useCallback(async () => {
@@ -221,6 +208,19 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
     fetchPains();
   }, [fetchPains]);
 
+  // When arriving from Scout (Respond to Webhook data), show that result
+  useEffect(() => {
+    if (researchResult == null || typeof researchResult !== 'object') return;
+    const data = researchResult as { pains?: PainArchetype[]; painLibrary?: PainArchetype[] };
+    const list = data.painLibrary ?? data.pains;
+    if (Array.isArray(list) && list.length > 0) {
+      const normalized = list.map((p) => normalizePainArchetype(p));
+      setPains(normalized);
+      setStorePains(normalized);
+      setResearchResult(null);
+    }
+  }, [researchResult, setResearchResult, setStorePains]);
+
   useEffect(() => {
     const fromSearch = new URLSearchParams(window.location.search).get('painId');
     const fromHash = new URLSearchParams(window.location.hash.split('?')[1] || '').get('painId');
@@ -230,6 +230,16 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
       if (pain) setSelectedPain(pain);
     }
   }, [pains]);
+
+  // Open full report when URL has report=full (e.g. from Dashboard "View full report")
+  useEffect(() => {
+    const hashQuery = window.location.hash.split('?')[1] || '';
+    const reportParam = new URLSearchParams(hashQuery).get('report');
+    if (reportParam === 'full' && reportHistory.length > 0 && reportHistory[0].comprehensiveReport) {
+      setFullReportContent(reportHistory[0].comprehensiveReport);
+      setFullReportOpen(true);
+    }
+  }, [reportHistory]);
 
   // Filter and sort pains
   const filteredPains = useMemo(() => {
@@ -304,7 +314,7 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
             <span className="font-semibold text-lg hidden lg:block">PainScope AI</span>
           </button>
         </div>
-        <nav className="p-3">
+        <nav className="p-3 space-y-2">
           <button
             onClick={() => onNavigate('dashboard')}
             className="w-full flex items-center gap-3 px-3 py-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
@@ -312,8 +322,111 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
             <span className="text-sm hidden lg:block">← Back to Dashboard</span>
             <span className="lg:hidden">←</span>
           </button>
+          <button
+            onClick={() => setReportSidebarOpen(!reportSidebarOpen)}
+            className="w-full flex items-center gap-3 px-3 py-3 rounded-lg text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          >
+            <BarChart3 className="w-5 h-5" />
+            <span className="text-sm hidden lg:block">Report History</span>
+          </button>
         </nav>
       </div>
+
+      {/* Report History Sidebar */}
+      <AnimatePresence>
+        {reportSidebarOpen && (
+          <motion.div
+            initial={{ x: -300, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -300, opacity: 0 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="w-80 border-r border-border bg-sidebar/50 backdrop-blur-sm flex-shrink-0 overflow-y-auto"
+          >
+            <div className="p-4 border-b border-border flex items-center justify-between sticky top-0 bg-sidebar/95 backdrop-blur">
+              <h3 className="font-semibold">Report History</h3>
+              <button
+                onClick={() => setReportSidebarOpen(false)}
+                className="p-1 rounded hover:bg-secondary transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 space-y-2">
+              {reportHistory.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  No reports yet. Complete a briefing to generate your first report.
+                </div>
+              ) : (
+                reportHistory.map((report) => (
+                  <button
+                    key={report.id}
+                    onClick={() => setSelectedReport(selectedReport === report.id ? null : report.id)}
+                    className={`w-full text-left p-3 rounded-lg transition-colors ${
+                      selectedReport === report.id ? 'bg-lime/10 border border-lime/30' : 'bg-secondary/30 hover:bg-secondary/50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(report.timestamp).toLocaleDateString()} {new Date(report.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                      <Badge variant="secondary" className="text-xs">
+                        {report.painCount} pains
+                      </Badge>
+                    </div>
+                    <p className="text-sm font-medium mb-1">{report.topPain || 'Market Research'}</p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>Avg Score: {report.avgPainScore}</span>
+                      <span>•</span>
+                      <span>{report.dashboardMetrics.sourcesAnalyzed || 0} sources</span>
+                    </div>
+                    {selectedReport === report.id && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="mt-3 pt-3 border-t border-border space-y-2"
+                      >
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="p-2 rounded bg-background/50">
+                            <p className="text-muted-foreground">Pains Discovered</p>
+                            <p className="font-semibold text-lime">{report.dashboardMetrics.totalPainsDiscovered || report.painCount}</p>
+                          </div>
+                          <div className="p-2 rounded bg-background/50">
+                            <p className="text-muted-foreground">Avg PainScore</p>
+                            <p className="font-semibold text-lime">{report.avgPainScore}</p>
+                          </div>
+                          <div className="p-2 rounded bg-background/50">
+                            <p className="text-muted-foreground">Sources</p>
+                            <p className="font-semibold">{report.dashboardMetrics.sourcesAnalyzed || 0}</p>
+                          </div>
+                          <div className="p-2 rounded bg-background/50">
+                            <p className="text-muted-foreground">Active Agents</p>
+                            <p className="font-semibold">{report.dashboardMetrics.activeAgents || 0}</p>
+                          </div>
+                        </div>
+                        {report.comprehensiveReport && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full mt-2 border-lime text-lime hover:bg-lime/10"
+                            onClick={() => {
+                              setFullReportContent(report.comprehensiveReport ?? null);
+                              setFullReportOpen(true);
+                            }}
+                          >
+                            <FileText className="w-4 h-4 mr-2" />
+                            Read full report
+                          </Button>
+                        )}
+                      </motion.div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
@@ -330,6 +443,20 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
           </div>
 
           <div className="flex items-center gap-3">
+            {reportHistory.length > 0 && reportHistory[0].comprehensiveReport && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-lime text-lime hover:bg-lime/10"
+                onClick={() => {
+                  setFullReportContent(reportHistory[0].comprehensiveReport ?? null);
+                  setFullReportOpen(true);
+                }}
+              >
+                <FileText className="w-4 h-4 mr-2" />
+                View full report
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={handleExportCsv}>
               <Download className="w-4 h-4 mr-2" />
               Export CSV
@@ -480,7 +607,22 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
           {paginatedPains.length === 0 && (
             <div className="text-center py-12 text-muted-foreground">
               <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>No pains found matching your search</p>
+              {pains.length === 0 ? (
+                <>
+                  <p className="mb-2">No pain data available yet</p>
+                  <p className="text-sm mb-4">Complete an AI briefing to discover market pains</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onNavigate('briefing')}
+                  >
+                    <Zap className="w-4 h-4 mr-2" />
+                    Start Briefing
+                  </Button>
+                </>
+              ) : (
+                <p>No pains found matching your search</p>
+              )}
             </div>
           )}
         </div>
@@ -566,13 +708,47 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
                   <p className="text-foreground">{selectedPain.description}</p>
                 </div>
 
+                {/* Opportunity note (from webhook) */}
+                {selectedPain.opportunityNote && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Opportunity</h3>
+                    <p className="text-foreground bg-lime/5 border border-lime/20 rounded-lg p-4">{selectedPain.opportunityNote}</p>
+                  </div>
+                )}
+
+                {/* Existing solutions (from webhook) */}
+                {selectedPain.existingSolutions && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Existing Solutions</h3>
+                    <p className="text-foreground">{selectedPain.existingSolutions}</p>
+                  </div>
+                )}
+
+                {/* Voice of customer quotes (from webhook) */}
+                {selectedPain.quotes && selectedPain.quotes.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-medium text-muted-foreground mb-2">Voice of Customer</h3>
+                    <ul className="space-y-2">
+                      {selectedPain.quotes.map((q, i) => (
+                        <li key={i} className="flex gap-2">
+                          <span className="text-lime">“</span>
+                          <span className="text-foreground">{q.replace(/^["']|["']$/g, '')}</span>
+                          <span className="text-lime">”</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 {/* Tags */}
                 <div>
                   <h3 className="text-sm font-medium text-muted-foreground mb-2">Tags</h3>
                   <div className="flex flex-wrap gap-2">
-                    {selectedPain.tags.map(tag => (
+                    {selectedPain.tags.length > 0 ? selectedPain.tags.map(tag => (
                       <Badge key={tag} variant="secondary">{tag}</Badge>
-                    ))}
+                    )) : (
+                      <span className="text-muted-foreground text-sm">No tags</span>
+                    )}
                   </div>
                 </div>
 
@@ -636,8 +812,87 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Full report modal */}
+      <AnimatePresence>
+        {fullReportOpen && fullReportContent && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setFullReportOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className="bg-background border border-border rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b border-border">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-lime" />
+                  Comprehensive Report
+                </h2>
+                <button
+                  onClick={() => setFullReportOpen(false)}
+                  className="p-2 rounded-lg hover:bg-secondary transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6">
+                <div className="prose prose-invert prose-sm max-w-none">
+                  <ReportMarkdown content={fullReportContent} />
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
+}
+
+/** Renders markdown-like report content: headings, bold, links, code blocks */
+function ReportMarkdown({ content }: { content: string }) {
+  const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let key = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('## ')) {
+      elements.push(<h2 key={key++} className="text-lg font-semibold mt-6 mb-2 text-foreground">{line.slice(3)}</h2>);
+    } else if (line.startsWith('### ')) {
+      elements.push(<h3 key={key++} className="text-base font-semibold mt-4 mb-1 text-foreground">{line.slice(4)}</h3>);
+    } else if (line.startsWith('**') && line.endsWith('**')) {
+      elements.push(<p key={key++} className="font-semibold text-foreground my-1">{line.slice(2, -2)}</p>);
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      elements.push(<li key={key++} className="ml-4 my-0.5 text-muted-foreground">{line.slice(2)}</li>);
+    } else if (line.trim() === '---') {
+      elements.push(<hr key={key++} className="border-border my-4" />);
+    } else if (line.trim() === '') {
+      elements.push(<div key={key++} className="h-2" />);
+    } else {
+      // Inline: replace [text](url) with links
+      const parts: React.ReactNode[] = [];
+      const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+      let match;
+      let lastIndex = 0;
+      while ((match = linkRe.exec(line)) !== null) {
+        if (match.index > lastIndex) {
+          parts.push(line.slice(lastIndex, match.index));
+        }
+        parts.push(<a key={`${key}-${match.index}`} href={match[2]} target="_blank" rel="noopener noreferrer" className="text-lime underline hover:no-underline">{match[1]}</a>);
+        lastIndex = linkRe.lastIndex;
+      }
+      if (lastIndex < line.length) parts.push(line.slice(lastIndex));
+      elements.push(<p key={key++} className="text-muted-foreground my-1">{parts.length > 0 ? parts : line}</p>);
+    }
+  }
+  return <>{elements}</>;
 }
 
 function Sparkline({ data }: { data: number[] }) {

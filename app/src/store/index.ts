@@ -11,6 +11,8 @@ import type {
   AgentState,
   UserSettings,
   PainFilter,
+  WebhookDashboardMetrics,
+  RecentDiscoveryItem,
 } from '@/types';
 
 // Briefing Store
@@ -19,10 +21,24 @@ interface BriefingStore {
   briefingData: BriefingData;
   briefingId: string | null;
   isComplete: boolean;
+  /** Set when Respond to Webhook returns; Library consumes pains/painLibrary */
+  researchResult: unknown | null;
+  /** In-flight webhook promise; Scout awaits it then navigates to Library */
+  researchWebhookPromise: Promise<unknown> | null;
+  /** Populated from webhook for Dashboard metrics */
+  dashboardMetrics: WebhookDashboardMetrics | null;
+  /** Populated from webhook for Dashboard recent discoveries */
+  recentDiscoveries: RecentDiscoveryItem[] | null;
+  /** History of all report generations */
+  reportHistory: ReportHistory[];
   addMessage: (message: ChatMessage) => void;
   updateBriefingData: (data: Partial<BriefingData>) => void;
   setBriefingId: (id: string | null) => void;
   setComplete: (complete: boolean) => void;
+  setResearchResult: (data: unknown | null) => void;
+  setResearchWebhookPromise: (p: Promise<unknown> | null) => void;
+  /** Set researchResult and extract dashboardMetrics + recentDiscoveries from webhook payload */
+  setWebhookPayload: (data: unknown) => void;
   reset: () => void;
 }
 
@@ -39,6 +55,11 @@ export const useBriefingStore = create<BriefingStore>()((set) => ({
   briefingData: defaultBriefingData,
   briefingId: null,
   isComplete: false,
+  researchResult: null,
+  researchWebhookPromise: null,
+  dashboardMetrics: null,
+  recentDiscoveries: null,
+  reportHistory: [],
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
   updateBriefingData: (data) =>
@@ -47,12 +68,75 @@ export const useBriefingStore = create<BriefingStore>()((set) => ({
     })),
   setBriefingId: (id) => set({ briefingId: id }),
   setComplete: (complete) => set({ isComplete: complete }),
+  setResearchResult: (data) => set({ researchResult: data }),
+  setResearchWebhookPromise: (p) => set({ researchWebhookPromise: p }),
+  setWebhookPayload: (data) => {
+    if (data == null) return;
+    
+    // n8n "Respond to Webhook" with "All Incoming Items" returns an array - unwrap it
+    let payload: Record<string, unknown>;
+    if (Array.isArray(data)) {
+      if (data.length === 0) return;
+      payload = data[0] as Record<string, unknown>;
+      console.log('[PainScope] Unwrapped array from webhook, using first item');
+    } else if (typeof data === 'object') {
+      payload = data as Record<string, unknown>;
+    } else {
+      console.error('[PainScope] Invalid webhook data type:', typeof data);
+      return;
+    }
+    
+    console.log('[PainScope] Processing webhook payload:', payload);
+    
+    const rawMetrics = payload.dashboardMetrics as Record<string, unknown> | undefined;
+    
+    // Normalize n8n field names to app field names
+    const metrics: WebhookDashboardMetrics | null = rawMetrics ? {
+      totalPainsDiscovered: Number(rawMetrics.painsDiscovered ?? rawMetrics.totalPainsDiscovered) || undefined,
+      averagePainScore: Number(rawMetrics.avgPainScore ?? rawMetrics.averagePainScore) || undefined,
+      sourcesAnalyzed: Number(rawMetrics.sourcesAnalyzed) || undefined,
+      activeAgents: Number(rawMetrics.activeAgents) || undefined,
+    } : null;
+    
+    const recent = payload.recentDiscoveries as RecentDiscoveryItem[] | undefined;
+    const pains = (payload.painLibrary ?? payload.pains) as Record<string, unknown>[] | undefined;
+    
+    // Extract full report and structured data for rich UI
+    const comprehensiveReport = typeof payload.comprehensiveReport === 'string' ? payload.comprehensiveReport : undefined;
+    const structuredData = payload.aiStructuredData && typeof payload.aiStructuredData === 'object'
+      ? (payload.aiStructuredData as Record<string, unknown>)
+      : undefined;
+
+    // Create report history entry (includes full report for "Read full report")
+    const reportEntry: ReportHistory = {
+      id: `report-${Date.now()}`,
+      timestamp: new Date(),
+      dashboardMetrics: metrics ?? {},
+      painCount: Array.isArray(pains) ? pains.length : 0,
+      avgPainScore: metrics?.averagePainScore ?? 0,
+      topPain: Array.isArray(pains) && pains.length > 0 ? ((pains[0].archetype ?? pains[0].name) as string) : undefined,
+      comprehensiveReport,
+      structuredData,
+    };
+
+    set((state) => ({
+      researchResult: payload,
+      dashboardMetrics: metrics,
+      recentDiscoveries: Array.isArray(recent) ? recent : null,
+      reportHistory: [reportEntry, ...state.reportHistory],
+    }));
+  },
   reset: () =>
     set({
       messages: [],
       briefingData: defaultBriefingData,
       briefingId: null,
       isComplete: false,
+      researchResult: null,
+      researchWebhookPromise: null,
+      dashboardMetrics: null,
+      recentDiscoveries: null,
+      reportHistory: [],
     }),
 }));
 
@@ -197,6 +281,8 @@ interface UIStore {
   setCurrentRoute: (route: string) => void;
   addNotification: (notification: Notification) => void;
   removeNotification: (id: string) => void;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
   clearNotifications: () => void;
 }
 
@@ -223,6 +309,16 @@ export const useUIStore = create<UIStore>()((set) => ({
   removeNotification: (id) =>
     set((state) => ({
       notifications: state.notifications.filter((n) => n.id !== id),
+    })),
+  markNotificationRead: (id) =>
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.id === id ? { ...n, read: true } : n
+      ),
+    })),
+  markAllNotificationsRead: () =>
+    set((state) => ({
+      notifications: state.notifications.map((n) => ({ ...n, read: true })),
     })),
   clearNotifications: () => set({ notifications: [] }),
 }));

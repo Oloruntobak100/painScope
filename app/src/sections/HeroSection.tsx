@@ -21,20 +21,20 @@ interface HeroSectionProps {
 // Animated particle background
 const ParticleField = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     const resize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     };
     resize();
     window.addEventListener('resize', resize);
-    
+
     const particles: Array<{ x: number; y: number; vx: number; vy: number; size: number; alpha: number }> = [];
     for (let i = 0; i < 60; i++) {
       particles.push({
@@ -46,23 +46,23 @@ const ParticleField = () => {
         alpha: Math.random() * 0.5 + 0.2,
       });
     }
-    
+
     let animationId: number;
     const animate = () => {
       ctx.fillStyle = 'rgba(5, 5, 8, 0.08)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
+
       particles.forEach((p, i) => {
         p.x += p.vx;
         p.y += p.vy;
         if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
         if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
-        
+
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(0, 245, 212, ${p.alpha})`;
         ctx.fill();
-        
+
         particles.slice(i + 1).forEach(p2 => {
           const dx = p.x - p2.x;
           const dy = p.y - p2.y;
@@ -79,13 +79,13 @@ const ParticleField = () => {
       animationId = requestAnimationFrame(animate);
     };
     animate();
-    
+
     return () => {
       window.removeEventListener('resize', resize);
       cancelAnimationFrame(animationId);
     };
   }, []);
-  
+
   return <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }} />;
 };
 

@@ -46,6 +46,12 @@ export interface PainArchetype {
   tags: string[];
   createdAt: Date;
   frequencyHistory: number[];
+  /** From webhook: opportunity insight */
+  opportunityNote?: string;
+  /** From webhook: existing solutions */
+  existingSolutions?: string;
+  /** From webhook: voice of customer quotes */
+  quotes?: string[];
 }
 
 export interface PainSource {
@@ -126,6 +132,35 @@ export interface NavItem {
   icon: string;
   href: string;
   badge?: number;
+}
+
+// Webhook payload from n8n (Respond to Webhook)
+export interface WebhookDashboardMetrics {
+  totalPainsDiscovered?: number;
+  averagePainScore?: number;
+  sourcesAnalyzed?: number;
+  activeAgents?: number;
+}
+
+export interface RecentDiscoveryItem {
+  id?: string;
+  name: string;
+  painScore: number;
+  source?: string;
+  trend?: number[];
+}
+
+export interface ReportHistory {
+  id: string;
+  timestamp: Date;
+  dashboardMetrics: WebhookDashboardMetrics;
+  painCount: number;
+  avgPainScore: number;
+  topPain?: string;
+  /** Full markdown report from webhook (comprehensiveReport) */
+  comprehensiveReport?: string;
+  /** Structured insights: marketGaps, quickWins, rawMetrics, etc. */
+  structuredData?: Record<string, unknown>;
 }
 
 // API Response Types

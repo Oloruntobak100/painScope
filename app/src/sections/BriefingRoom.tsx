@@ -13,15 +13,20 @@ import {
   Bot,
   User,
   X,
+  ArrowUp,
+  Edit,
+  Save,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useBriefingStore, useAuthStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { ChatMessage, BriefingData } from '@/types';
 
-const N8N_WEBHOOK_URL = import.meta.env.VITE_N8N_WEBHOOK_URL ?? '';
+// Default webhook URL for PainScope research
+const N8N_WEBHOOK_URL = 'https://northsnow.app.n8n.cloud/webhook/painScope';
 
 interface N8nChatResponse {
   reply?: string;
@@ -41,30 +46,58 @@ const initialMessage: ChatMessage = {
   timestamp: new Date(),
 };
 
+// Industry options for dropdown
+const INDUSTRY_OPTIONS = [
+  'Fintech',
+  'HealthTech',
+  'SaaS',
+  'E-commerce',
+  'EdTech',
+  'PropTech',
+  'InsurTech',
+  'LegalTech',
+  'MarTech',
+  'AgriTech',
+  'FoodTech',
+  'Logistics',
+  'Manufacturing',
+  'Retail',
+  'Healthcare',
+  'Education',
+  'Real Estate',
+  'Financial Services',
+  'Consulting',
+  'Other',
+];
+
 const questions = [
   {
     field: 'industry' as keyof BriefingData,
     question: 'What industry are you operating in?',
-    placeholder: 'e.g., Fintech, HealthTech, SaaS',
+    placeholder: 'Select your industry',
     icon: Building2,
+    isDropdown: true,
   },
   {
     field: 'productFocus' as keyof BriefingData,
     question: 'What is your product or business focus?',
     placeholder: 'e.g., B2B payment platform',
     icon: Target,
+    isDropdown: false,
   },
   {
     field: 'competitors' as keyof BriefingData,
     question: 'Who are your main competitors? (comma-separated)',
     placeholder: 'e.g., Stripe, PayPal, Square',
     icon: Users,
+    isDropdown: false,
   },
   {
     field: 'targetAudience' as keyof BriefingData,
     question: 'Who is your target audience?',
     placeholder: 'e.g., Small business owners, Enterprise CFOs',
     icon: Users,
+    isDropdown: false,
   },
 ];
 
@@ -74,9 +107,13 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
   const [isTyping, setIsTyping] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [showFinalForm, setShowFinalForm] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedData, setEditedData] = useState<BriefingData | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { messages, briefingData, briefingId, addMessage, updateBriefingData, setBriefingId, setComplete } = useBriefingStore();
+  const summaryRef = useRef<HTMLDivElement>(null);
+  const { messages, briefingData, briefingId, addMessage, updateBriefingData, setBriefingId, setComplete, setResearchWebhookPromise } = useBriefingStore();
   const { user } = useAuthStore();
 
   // Initialize with welcome message
@@ -103,15 +140,14 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
     });
   };
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
-
-    setChatError(null);
+  const handleSend = async (selectedValue?: string) => {
+    const valueToSend = selectedValue || input.trim();
+    if (!valueToSend) return;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: input,
+      content: valueToSend,
       timestamp: new Date(),
     };
     addMessage(userMessage);
@@ -119,53 +155,19 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
     const currentQuestion = questions[currentQuestionIndex];
     const updatedData: Partial<BriefingData> =
       currentQuestion.field === 'competitors'
-        ? { [currentQuestion.field]: input.split(',').map((c) => c.trim()) }
-        : { [currentQuestion.field]: input };
+        ? { [currentQuestion.field]: valueToSend.split(',').map((c) => c.trim()) }
+        : { [currentQuestion.field]: valueToSend };
     updateBriefingData(updatedData);
 
     setInput('');
     setIsTyping(true);
 
-    let assistantReply: string;
-    let extractedData: Partial<BriefingData> | undefined;
-    let isComplete = false;
-
-    if (N8N_WEBHOOK_URL) {
-      try {
-        const payload = {
-          messages: [...messages, userMessage].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          briefingData: { ...briefingData, ...updatedData },
-          currentQuestionIndex,
-          totalQuestions: questions.length,
-        };
-        const res = await fetch(N8N_WEBHOOK_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error(`Webhook error: ${res.status}`);
-        const data: N8nChatResponse = await res.json();
-        assistantReply = data.reply ?? `Great! **${questions[currentQuestionIndex + 1]?.question ?? "I've gathered the information."}**`;
-        extractedData = data.extractedData;
-        if (extractedData) updateBriefingData(extractedData);
-        if (currentQuestionIndex >= questions.length - 1) isComplete = true;
-      } catch (err) {
-        setChatError(err instanceof Error ? err.message : 'AI request failed. Using fallback.');
-        assistantReply = currentQuestionIndex < questions.length - 1
-          ? `Great! **${questions[currentQuestionIndex + 1].question}**`
-          : "Perfect! I've gathered all the information I need. Take a look at the briefing summary on the right.";
-        isComplete = currentQuestionIndex >= questions.length - 1;
-      }
-    } else {
-      await new Promise((r) => setTimeout(r, 800));
-      assistantReply = currentQuestionIndex < questions.length - 1
-        ? `Great! **${questions[currentQuestionIndex + 1].question}**`
-        : "Perfect! I've gathered all the information I need. Take a look at the briefing summary on the right, and let me know when you're ready to launch the scouts!";
-      isComplete = currentQuestionIndex >= questions.length - 1;
-    }
+    // Q&A only collects input locally; webhook is fired only from "Submit & Start Research"
+    await new Promise((r) => setTimeout(r, 800));
+    const isComplete = currentQuestionIndex >= questions.length - 1;
+    const assistantReply = currentQuestionIndex < questions.length - 1
+      ? `Great! **${questions[currentQuestionIndex + 1].question}**`
+      : "Perfect! I've gathered all the information I need. Take a look at the briefing summary on the right—you can edit, save, then use **Submit & Start Research** when you're ready.";
 
     const assistantMessage: ChatMessage = {
       id: (Date.now() + 1).toString(),
@@ -179,7 +181,7 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
       try {
         let briefId = briefingId;
         if (!briefId) {
-          const merged = { ...briefingData, ...updatedData, ...extractedData };
+          const merged = { ...briefingData, ...updatedData };
           const { data: brief, error } = await supabase
             .from('briefings')
             .insert({
@@ -202,7 +204,7 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
           await persistToSupabase(briefId, { role: 'user', content: input });
           await persistToSupabase(briefId, { role: 'assistant', content: assistantReply });
           if (isComplete) {
-            const finalData = { ...briefingData, ...updatedData, ...extractedData };
+            const finalData = { ...briefingData, ...updatedData };
             await supabase
               .from('briefings')
               .update({
@@ -278,6 +280,83 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
     }
   };
 
+  const scrollToSummary = () => {
+    summaryRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handleEdit = () => {
+    setIsEditing(true);
+    setEditedData({ ...briefingData });
+  };
+
+  const handleSaveEdit = () => {
+    if (editedData) {
+      updateBriefingData(editedData);
+    }
+    setIsEditing(false);
+    setEditedData(null);
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditedData(null);
+  };
+
+  const handleSubmitBriefing = () => {
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    const webhookPayload = {
+      userId: user?.id,
+      briefingId,
+      briefingData: briefingData,
+      timestamp: new Date().toISOString(),
+      action: 'start_research',
+    };
+
+    console.log('[PainScope] Firing webhook to:', N8N_WEBHOOK_URL);
+    console.log('[PainScope] Payload:', webhookPayload);
+
+    // Fire webhook to n8n
+    const promise = fetch(N8N_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(webhookPayload),
+    })
+      .then(async (response) => {
+        console.log('[PainScope] Webhook response status:', response.status);
+        if (!response.ok) throw new Error(`Webhook failed: ${response.status}`);
+        const data = await response.json().catch(() => ({}));
+        console.log('[PainScope] Webhook response data:', data);
+        return data;
+      })
+      .then((researchData) => {
+        // ScoutLab will call setWebhookPayload when it receives this data
+        // which normalizes metrics and creates report history
+        if (isSupabaseConfigured() && user && briefingId) {
+          supabase
+            .from('briefings')
+            .update({
+              is_complete: true,
+              research_data: researchData,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', briefingId)
+            .then(() => {});
+        }
+        return researchData;
+      })
+      .catch((error) => {
+        console.error('[PainScope] Webhook error:', error);
+        return null;
+      });
+
+    setResearchWebhookPromise(promise);
+    setComplete(true);
+    setIsSubmitting(false);
+    onNavigate('scout');
+  };
+
   return (
     <div className="min-h-screen bg-background flex">
       {/* Sidebar - Simplified for this view */}
@@ -304,8 +383,8 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
         </nav>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex">
+      {/* Main Content - min-h-0 so summary panel flex/scroll works */}
+      <div className="flex-1 flex min-h-0">
         {/* Chat Area */}
         <div className="flex-1 flex flex-col">
           {/* Header */}
@@ -383,96 +462,207 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
           {/* Input Area */}
           <div className="p-6 border-t border-border">
             <div className="flex gap-3">
-              <div className="flex-1 relative">
-                <Input
+              {questions[currentQuestionIndex]?.isDropdown ? (
+                <Select
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={questions[currentQuestionIndex]?.placeholder || 'Type your message...'}
-                  disabled={showSummary}
-                  className="pr-12 py-6 bg-secondary/50 border-border focus:border-lime/50 focus:ring-lime/20"
-                />
-              </div>
-              <Button
-                onClick={handleSend}
-                disabled={!input.trim() || isTyping || showSummary}
-                className="bg-lime text-background hover:bg-lime-light px-6"
-              >
-                {isTyping ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Send className="w-5 h-5" />
-                )}
-              </Button>
+                  onValueChange={(value) => {
+                    setInput(value);
+                    handleSend(value);
+                  }}
+                  disabled={isTyping || showSummary}
+                >
+                  <SelectTrigger className="flex-1 py-6 bg-secondary/50 border-border focus:border-lime/50 focus:ring-lime/20">
+                    <SelectValue placeholder={questions[currentQuestionIndex]?.placeholder} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {INDUSTRY_OPTIONS.map((industry) => (
+                      <SelectItem key={industry} value={industry}>
+                        {industry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <>
+                  <div className="flex-1 relative">
+                    <Input
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={questions[currentQuestionIndex]?.placeholder || 'Type your message...'}
+                      disabled={showSummary}
+                      className="pr-12 py-6 bg-secondary/50 border-border focus:border-lime/50 focus:ring-lime/20"
+                    />
+                  </div>
+                  <Button
+                    onClick={() => handleSend()}
+                    disabled={!input.trim() || isTyping || showSummary}
+                    className="bg-lime text-background hover:bg-lime-light px-6"
+                  >
+                    {isTyping ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                  </Button>
+                </>
+              )}
             </div>
-            {chatError && (
-              <p className="text-xs text-amber-500 mt-2 text-center">{chatError}</p>
+            {!questions[currentQuestionIndex]?.isDropdown && (
+              <p className="text-xs text-muted-foreground mt-3 text-center">
+                Press Enter to send, Shift+Enter for new line
+              </p>
             )}
-            <p className="text-xs text-muted-foreground mt-3 text-center">
-              Press Enter to send, Shift+Enter for new line
-            </p>
+            
+            {/* Up Arrow Button - Show after all questions answered */}
+            {showSummary && (
+              <div className="flex justify-center mt-4">
+                <Button
+                  onClick={scrollToSummary}
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                >
+                  <ArrowUp className="w-4 h-4" />
+                  View Summary
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Briefing Summary Panel */}
+        {/* Briefing Summary Panel - flex layout so buttons stay visible */}
         <AnimatePresence>
           {(showSummary || messages.length > 1) && (
             <motion.div
+              ref={summaryRef}
               initial={{ opacity: 0, x: 50 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 50 }}
-              className="w-80 border-l border-border bg-secondary/20 p-6 hidden lg:block"
+              className="w-80 border-l border-border bg-secondary/20 hidden lg:flex lg:flex-col lg:min-h-0"
             >
-              <div className="flex items-center gap-2 mb-6">
-                <FileText className="w-5 h-5 text-lime" />
-                <h2 className="font-semibold">Briefing Summary</h2>
+              <div className="px-6 pt-4 pb-2 flex-shrink-0">
+                <div className="flex items-center gap-2 mb-4">
+                  <FileText className="w-5 h-5 text-lime" />
+                  <h2 className="font-semibold">Briefing Summary</h2>
+                </div>
               </div>
 
-              <div className="space-y-4">
-                <SummaryItem
-                  icon={Building2}
-                  label="Industry"
-                  value={briefingData.industry}
-                  isComplete={!!briefingData.industry}
-                />
-                <SummaryItem
-                  icon={Target}
-                  label="Product Focus"
-                  value={briefingData.productFocus}
-                  isComplete={!!briefingData.productFocus}
-                />
-                <SummaryItem
-                  icon={Users}
-                  label="Competitors"
-                  value={briefingData.competitors.join(', ')}
-                  isComplete={briefingData.competitors.length > 0}
-                />
-                <SummaryItem
-                  icon={Users}
-                  label="Target Audience"
-                  value={briefingData.targetAudience}
-                  isComplete={!!briefingData.targetAudience}
-                />
+              {/* Scrollable summary content */}
+              <div className="flex-1 min-h-0 overflow-y-auto px-6 py-2">
+                <div className="space-y-3">
+                  {isEditing && editedData ? (
+                    <>
+                      <EditableSummaryItem
+                        icon={Building2}
+                        label="Industry"
+                        value={editedData.industry}
+                        onChange={(val) => setEditedData({ ...editedData, industry: val })}
+                        isDropdown
+                        options={INDUSTRY_OPTIONS}
+                      />
+                      <EditableSummaryItem
+                        icon={Target}
+                        label="Product Focus"
+                        value={editedData.productFocus}
+                        onChange={(val) => setEditedData({ ...editedData, productFocus: val })}
+                      />
+                      <EditableSummaryItem
+                        icon={Users}
+                        label="Competitors"
+                        value={editedData.competitors.join(', ')}
+                        onChange={(val) => setEditedData({ ...editedData, competitors: val.split(',').map(c => c.trim()) })}
+                      />
+                      <EditableSummaryItem
+                        icon={Users}
+                        label="Target Audience"
+                        value={editedData.targetAudience}
+                        onChange={(val) => setEditedData({ ...editedData, targetAudience: val })}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <SummaryItem
+                        icon={Building2}
+                        label="Industry"
+                        value={briefingData.industry}
+                        isComplete={!!briefingData.industry}
+                      />
+                      <SummaryItem
+                        icon={Target}
+                        label="Product Focus"
+                        value={briefingData.productFocus}
+                        isComplete={!!briefingData.productFocus}
+                      />
+                      <SummaryItem
+                        icon={Users}
+                        label="Competitors"
+                        value={briefingData.competitors.join(', ')}
+                        isComplete={briefingData.competitors.length > 0}
+                      />
+                      <SummaryItem
+                        icon={Users}
+                        label="Target Audience"
+                        value={briefingData.targetAudience}
+                        isComplete={!!briefingData.targetAudience}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
 
+              {/* Buttons section - compact, always visible, deep green for primary actions */}
               {showSummary && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="mt-8"
-                >
-                  <Button
-                    onClick={handleLaunchScouts}
-                    className="w-full bg-lime text-background hover:bg-lime-light font-semibold py-6"
-                  >
-                    <Sparkles className="w-5 h-5 mr-2" />
-                    Launch Scouts
-                    <ArrowRight className="w-5 h-5 ml-2" />
-                  </Button>
-                  <p className="text-xs text-muted-foreground text-center mt-3">
-                    This will deploy AI agents to start discovery
-                  </p>
-                </motion.div>
+                <div className="flex-shrink-0 p-4 pt-3 border-t border-border bg-background/50">
+                  {isEditing ? (
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={handleCancelEdit}
+                        variant="outline"
+                        className="flex-1 border-border text-foreground hover:bg-secondary"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleSaveEdit}
+                        className="flex-1 bg-actionGreen text-white hover:bg-actionGreen-hover font-medium shadow-md"
+                      >
+                        <Save className="w-4 h-4 mr-2" />
+                        Save
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <Button
+                        onClick={handleEdit}
+                        variant="outline"
+                        className="w-full mb-2 border-border text-foreground hover:bg-secondary"
+                      >
+                        <Edit className="w-4 h-4 mr-2" />
+                        Edit Responses
+                      </Button>
+                      <Button
+                        onClick={handleSubmitBriefing}
+                        disabled={isSubmitting}
+                        className="w-full bg-actionGreen text-white hover:bg-actionGreen-hover font-semibold py-5 shadow-md disabled:opacity-70 disabled:cursor-not-allowed"
+                      >
+                        {isSubmitting ? (
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-5 h-5 mr-2" />
+                        )}
+                        Submit & Start Research
+                        <ArrowRight className="w-5 h-5 ml-2" />
+                      </Button>
+                      {submitError && (
+                        <p className="text-xs text-amber-500 text-center mt-2" role="alert">{submitError}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground text-center mt-1">
+                        Triggers AI research using FireCrawl
+                      </p>
+                    </>
+                  )}
+                </div>
               )}
             </motion.div>
           )}
@@ -577,6 +767,46 @@ function SummaryItem({ icon: Icon, label, value, isComplete }: SummaryItemProps)
       <p className={`font-medium ${isComplete ? 'text-foreground' : 'text-muted-foreground italic'}`}>
         {value || 'Not specified'}
       </p>
+    </div>
+  );
+}
+
+interface EditableSummaryItemProps {
+  icon: React.ElementType;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  isDropdown?: boolean;
+  options?: string[];
+}
+
+function EditableSummaryItem({ icon: Icon, label, value, onChange, isDropdown, options }: EditableSummaryItemProps) {
+  return (
+    <div className="p-4 rounded-lg border bg-secondary/50 border-lime/30">
+      <div className="flex items-center gap-2 mb-2">
+        <Icon className="w-4 h-4 text-lime" />
+        <span className="text-sm text-muted-foreground">{label}</span>
+      </div>
+      {isDropdown && options ? (
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger className="w-full bg-background">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full bg-background"
+        />
+      )}
     </div>
   );
 }

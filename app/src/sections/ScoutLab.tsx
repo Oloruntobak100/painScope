@@ -16,16 +16,17 @@ import {
   Zap,
   ChevronRight,
   BarChart3,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useBriefingStore, useAuthStore } from '@/store';
+import { useBriefingStore, useAuthStore, useUIStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { AgentLog, PainArchetype, PainSource } from '@/types';
 
 interface ScoutLabProps {
-  onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings') => void;
+  onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings', queryParams?: Record<string, string>) => void;
   currentRoute: string;
 }
 
@@ -52,6 +53,26 @@ const generateMockLogs = (agentId: string): AgentLog[] => [
   { id: '6', timestamp: new Date(Date.now() - 1000 * 30), level: 'info', message: 'Clustering sentiments using NLP...', metadata: {} },
   { id: '7', timestamp: new Date(Date.now() - 1000 * 15), level: 'success', message: 'Identified 5 pain archetypes', metadata: { archetypes: 5 } },
   { id: '8', timestamp: new Date(), level: 'info', message: 'Scoring pains by severity, frequency, urgency...', metadata: {} },
+];
+
+// Dummy crawl lines shown after briefing submit (n8n + FireCrawl workflow running)
+const CRAWL_FROM_BRIEFING_LOGS: { level: AgentLog['level']; message: string }[] = [
+  { level: 'info', message: 'Initializing FireCrawl pipeline...' },
+  { level: 'success', message: 'Connected to FireCrawl API' },
+  { level: 'info', message: 'Crawling https://www.g2.com — product reviews & comparisons' },
+  { level: 'info', message: 'Fetching https://www.capterra.com — software insights' },
+  { level: 'success', message: 'G2 & Capterra: 12 pages indexed' },
+  { level: 'info', message: 'Crawling Reddit r/SaaS, r/startups — community discussions' },
+  { level: 'success', message: 'Reddit: 47 threads analyzed' },
+  { level: 'info', message: 'Scanning Hacker News — tech & founder sentiment' },
+  { level: 'success', message: 'Hacker News: 8 relevant threads' },
+  { level: 'info', message: 'Parsing LinkedIn articles — B2B pain mentions' },
+  { level: 'info', message: 'Extracting pain points from review snippets...' },
+  { level: 'success', message: 'NLP clustering: 6 pain themes identified' },
+  { level: 'info', message: 'Scoring by severity, frequency, urgency...' },
+  { level: 'success', message: 'PainScore matrix computed' },
+  { level: 'info', message: 'Estimating revenue potential (TAM/SAM/SOM)...' },
+  { level: 'success', message: 'Discovery complete. Sending results to Library.' },
 ];
 
 // Mock discovered pains
@@ -136,17 +157,113 @@ function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[
   };
 }
 
+/** Normalize webhook pain item for ScoutLab display */
+function normalizeWebhookPain(p: Record<string, unknown>): PainArchetype {
+  const id = (p.id as string) ?? `pain-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const ts = p.topSource as Record<string, unknown> | undefined;
+  const sources: PainSource[] = ts ? [{
+    id: 's-0',
+    url: (ts.url as string) ?? '',
+    title: (ts.title as string) ?? (ts.name as string) ?? '',
+    platform: ((ts.name as string)?.toLowerCase() === 'web' ? 'forum' : (ts.name as string)?.toLowerCase() === 'news' ? 'news' : 'forum') as PainSource['platform'],
+    snippet: (p.description as string) ?? '',
+    sentiment: 'negative' as const,
+    date: p.timestamp ? new Date(p.timestamp as string) : new Date(),
+  }] : [];
+  const rev = p.revenuePotential as Record<string, unknown> | undefined;
+  const revRaw = rev?.raw ? Number(rev.raw) : 0;
+  const painScore = Number(p.painScore ?? p.pain_score) ?? 0;
+  return {
+    id,
+    name: (p.archetype as string) ?? (p.name as string) ?? '',
+    description: (p.description as string) ?? '',
+    painScore,
+    severity: Number(p.severity) ?? 0,
+    frequency: Number(p.frequency) ?? 0,
+    urgency: Number(p.urgency) ?? 0,
+    competitiveSaturation: Number(p.competitiveSaturation ?? p.competitive_saturation) ?? 0,
+    sources,
+    revenuePotential: {
+      tam: revRaw * 10,
+      sam: revRaw * 2.5,
+      som: revRaw * 0.5,
+      estimatedARR: revRaw,
+      confidence: 0.7,
+    },
+    tags: Array.isArray(p.tags) ? (p.tags as string[]) : [],
+    createdAt: p.timestamp ? new Date(p.timestamp as string) : new Date(),
+    frequencyHistory: [painScore * 0.5, painScore * 0.6, painScore * 0.7, painScore * 0.8, painScore * 0.9, painScore],
+  };
+}
+
 export default function ScoutLab({ onNavigate }: ScoutLabProps) {
   const [activeTab, setActiveTab] = useState('terminal');
-  const [isRunning, setIsRunning] = useState(true);
+  const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [discoveredPains, setDiscoveredPains] = useState<PainArchetype[]>([]);
-  const [currentTask, setCurrentTask] = useState('Initializing agent...');
+  const [currentTask, setCurrentTask] = useState('');
+  const [crawlFromBriefingDone, setCrawlFromBriefingDone] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useBriefingStore();
+  const { isComplete: briefingComplete, briefingData, researchWebhookPromise, researchResult, reportHistory, dashboardMetrics, setResearchWebhookPromise, setWebhookPayload } = useBriefingStore();
   const { user } = useAuthStore();
+  const { addNotification } = useUIStore();
+
+  // Detect if we just came from briefing submission (active crawl)
+  const isActivelyCrawling = briefingComplete && !!briefingData.industry && !crawlFromBriefingDone;
+  
+  // Load last scrape data when not crawling
+  useEffect(() => {
+    // Skip if we're actively crawling (waiting for webhook)
+    if (isActivelyCrawling && researchWebhookPromise) return;
+    
+    // Try to load from researchResult first
+    if (researchResult && typeof researchResult === 'object') {
+      const payload = researchResult as Record<string, unknown>;
+      const pains = (payload.painLibrary ?? payload.pains) as Record<string, unknown>[] | undefined;
+      if (Array.isArray(pains) && pains.length > 0) {
+        setDiscoveredPains(pains.map(normalizeWebhookPain));
+        setProgress(100);
+        setIsRunning(false);
+        const metrics = payload.dashboardMetrics as Record<string, unknown> | undefined;
+        setCurrentTask(`Last scan: ${pains.length} pains discovered • ${metrics?.sourcesAnalyzed ?? 0} sources analyzed`);
+        
+        // Generate completion logs from last scrape
+        const timestamp = new Date();
+        setLogs([
+          { id: 'complete-1', timestamp: new Date(timestamp.getTime() - 60000), level: 'success', message: 'FireCrawl pipeline completed', metadata: {} },
+          { id: 'complete-2', timestamp: new Date(timestamp.getTime() - 45000), level: 'success', message: `Analyzed ${metrics?.sourcesAnalyzed ?? 0} sources`, metadata: {} },
+          { id: 'complete-3', timestamp: new Date(timestamp.getTime() - 30000), level: 'success', message: `Discovered ${pains.length} pain archetypes`, metadata: {} },
+          { id: 'complete-4', timestamp: new Date(timestamp.getTime() - 15000), level: 'info', message: `Average PainScore: ${metrics?.avgPainScore ?? metrics?.averagePainScore ?? 0}`, metadata: {} },
+          { id: 'complete-5', timestamp, level: 'success', message: 'Results available in Pain Library', metadata: {} },
+        ]);
+        return;
+      }
+    }
+    
+    // Fallback to report history if no active researchResult
+    if (reportHistory.length > 0) {
+      const lastReport = reportHistory[0];
+      setProgress(100);
+      setIsRunning(false);
+      setCurrentTask(`Last report: ${lastReport.painCount} pains • Avg score ${lastReport.avgPainScore}`);
+      setLogs([
+        { id: 'hist-1', timestamp: lastReport.timestamp, level: 'success', message: `Report generated: ${lastReport.topPain || 'Market Research'}`, metadata: {} },
+        { id: 'hist-2', timestamp: lastReport.timestamp, level: 'info', message: `${lastReport.painCount} pain archetypes discovered`, metadata: {} },
+        { id: 'hist-3', timestamp: lastReport.timestamp, level: 'info', message: `Average PainScore: ${lastReport.avgPainScore}`, metadata: {} },
+      ]);
+    } else {
+      // No data at all - show empty state
+      setProgress(0);
+      setIsRunning(false);
+      setCurrentTask('No active crawl. Start a briefing to begin discovery.');
+      setLogs([]);
+      setDiscoveredPains([]);
+    }
+  }, [isActivelyCrawling, researchResult, reportHistory]);
+
+  const isCrawlingFromBriefing = isActivelyCrawling;
 
   const fetchFromSupabase = useCallback(async () => {
     if (!isSupabaseConfigured() || !user) return false;
@@ -204,30 +321,89 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
     return true;
   }, [user]);
 
+  // After briefing submit: show cmd/crawl effect while waiting for Respond to Webhook; when data arrives → Library
   useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const hasData = await fetchFromSupabase();
-      if (mounted && !hasData) {
-        const mockLogs = generateMockLogs('agent-1');
-        const mockPains = generateMockPains();
-        let logIndex = 0;
-        const iv = setInterval(() => {
-          if (logIndex < mockLogs.length) {
-            setLogs((prev) => [...prev, mockLogs[logIndex]]);
-            setCurrentTask(mockLogs[logIndex].message);
-            setProgress(Math.round(((logIndex + 1) / mockLogs.length) * 100));
-            logIndex++;
-          } else {
-            clearInterval(iv);
-            setDiscoveredPains(mockPains);
-            setIsRunning(false);
-          }
-        }, 1500);
-      }
-    })();
-    return () => { mounted = false; };
-  }, [fetchFromSupabase]);
+    if (!isCrawlingFromBriefing || crawlFromBriefingDone) return;
+
+    // Start the crawl animation
+    setIsRunning(true);
+    setLogs([]);
+    setProgress(0);
+    setCurrentTask('Initializing FireCrawl pipeline...');
+    setDiscoveredPains([]);
+
+    const promise = researchWebhookPromise;
+    if (!promise) {
+      // No webhook promise - shouldn't happen with default URL, but handle gracefully
+      setCurrentTask('Waiting for webhook connection...');
+      const timeout = setTimeout(() => {
+        setCrawlFromBriefingDone(true);
+        setIsRunning(false);
+        onNavigate('library');
+      }, 3000);
+      return () => clearTimeout(timeout);
+    }
+
+    // Stream crawl lines until promise resolves (Respond to Webhook returns)
+    let logIndex = 0;
+    const crawlLines = [...CRAWL_FROM_BRIEFING_LOGS];
+    const iv = setInterval(() => {
+      const i = logIndex % crawlLines.length;
+      const entry = crawlLines[i];
+      setLogs((prev) => [
+        ...prev,
+        { id: `crawl-${Date.now()}-${i}`, timestamp: new Date(), level: entry.level, message: entry.message, metadata: {} },
+      ]);
+      setCurrentTask(entry.message);
+      setProgress(Math.min(95, (logIndex + 1) * 6));
+      logIndex++;
+    }, 1200);
+
+    let cancelled = false;
+    promise
+      .then((data) => {
+        if (cancelled) return;
+        clearInterval(iv);
+        setResearchWebhookPromise(null);
+        if (data != null) setWebhookPayload(data);
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: 'crawl-done',
+            timestamp: new Date(),
+            level: 'success',
+            message: 'Discovery complete. Sending results to Library.',
+            metadata: {},
+          },
+        ]);
+        setCurrentTask('Discovery complete. Sending results to Library.');
+        setProgress(100);
+        // Pains will be loaded from webhook data via setWebhookPayload
+        setIsRunning(false);
+        setCrawlFromBriefingDone(true);
+        onNavigate('library');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        clearInterval(iv);
+        setResearchWebhookPromise(null);
+        setCurrentTask(`Error: ${err?.message || 'Webhook failed'}. Redirecting to library...`);
+        setIsRunning(false);
+        setCrawlFromBriefingDone(true);
+        setTimeout(() => onNavigate('library'), 2000);
+      });
+
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [isCrawlingFromBriefing, crawlFromBriefingDone, researchWebhookPromise, setResearchWebhookPromise, setWebhookPayload, addNotification, onNavigate]);
+
+  // Optionally load from Supabase if we have data there
+  useEffect(() => {
+    if (isCrawlingFromBriefing) return;
+    fetchFromSupabase();
+  }, [isCrawlingFromBriefing, fetchFromSupabase]);
 
   useEffect(() => {
     if (!isSupabaseConfigured() || !user || !isRunning) return;
@@ -357,6 +533,32 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
             </div>
           </div>
 
+          {/* Last report insight - View full report when not crawling */}
+          {!isCrawlingFromBriefing && reportHistory.length > 0 && reportHistory[0].comprehensiveReport && (
+            <div className="mb-6 p-4 rounded-xl glass border border-border flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-lime/10 flex items-center justify-center">
+                  <FileText className="w-5 h-5 text-lime" />
+                </div>
+                <div>
+                  <p className="font-medium">Latest report ready</p>
+                  <p className="text-sm text-muted-foreground">
+                    {reportHistory[0].painCount} pains • Avg score {reportHistory[0].avgPainScore} • {reportHistory[0].topPain || 'Market Research'}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-lime text-lime hover:bg-lime/10"
+                onClick={() => onNavigate('library', { report: 'full' })}
+              >
+                <FileText className="w-4 h-4 mr-2" />
+                View full report
+              </Button>
+            </div>
+          )}
+
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1">
             <TabsList className="mb-4">
               <TabsTrigger value="terminal" className="gap-2">
@@ -460,7 +662,18 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
                 {discoveredPains.length === 0 && (
                   <div className="text-center py-12 text-muted-foreground">
                     <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>Waiting for agent to discover pains...</p>
+                    <p className="mb-2">{isRunning ? 'Discovering pains...' : 'No pain data available'}</p>
+                    {!isRunning && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onNavigate('briefing')}
+                        className="mt-4"
+                      >
+                        <Zap className="w-4 h-4 mr-2" />
+                        Start New Briefing
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
@@ -468,6 +681,29 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
 
             <TabsContent value="visualization" className="mt-0">
               <div className="grid lg:grid-cols-2 gap-6">
+                {/* Key Metrics Summary */}
+                <div className="glass rounded-xl p-6 lg:col-span-2">
+                  <h3 className="font-semibold mb-4">Discovery Metrics</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="p-4 rounded-lg bg-lime/10 text-center">
+                      <p className="text-3xl font-bold text-lime">{discoveredPains.length}</p>
+                      <p className="text-xs text-muted-foreground">Pains Discovered</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-secondary/30 text-center">
+                      <p className="text-3xl font-bold">{discoveredPains.length > 0 ? Math.round(discoveredPains.reduce((a, p) => a + p.painScore, 0) / discoveredPains.length) : 0}</p>
+                      <p className="text-xs text-muted-foreground">Avg PainScore</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-secondary/30 text-center">
+                      <p className="text-3xl font-bold">{dashboardMetrics?.sourcesAnalyzed ?? 0}</p>
+                      <p className="text-xs text-muted-foreground">Sources Analyzed</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-secondary/30 text-center">
+                      <p className="text-3xl font-bold">${discoveredPains.length > 0 ? (discoveredPains.reduce((a, p) => a + p.revenuePotential.estimatedARR, 0) / 1000000).toFixed(0) : 0}M</p>
+                      <p className="text-xs text-muted-foreground">Total Est. ARR</p>
+                    </div>
+                  </div>
+                </div>
+                
                 {/* PainScore Radar */}
                 <div className="glass rounded-xl p-6">
                   <h3 className="font-semibold mb-4">Pain Intensity Matrix</h3>
@@ -478,24 +714,55 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
 
                 {/* Revenue Potential */}
                 <div className="glass rounded-xl p-6">
-                  <h3 className="font-semibold mb-4">Revenue Potential</h3>
-                  <div className="space-y-4">
-                    {discoveredPains.map((pain, index) => (
+                  <h3 className="font-semibold mb-4">Revenue Potential by Pain</h3>
+                  <div className="space-y-4 max-h-[300px] overflow-y-auto">
+                    {discoveredPains.slice(0, 8).map((pain, index) => (
                       <div key={pain.id}>
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm">{pain.name}</span>
-                          <span className="text-sm font-medium">${(pain.revenuePotential.estimatedARR / 1000000).toFixed(1)}M</span>
+                          <span className="text-sm truncate max-w-[200px]">{pain.name}</span>
+                          <span className="text-sm font-medium text-lime">${(pain.revenuePotential.estimatedARR / 1000000).toFixed(1)}M</span>
                         </div>
                         <div className="h-2 bg-secondary rounded-full overflow-hidden">
                           <motion.div
                             className="h-full bg-gradient-to-r from-lime to-lime-light"
                             initial={{ width: 0 }}
-                            animate={{ width: `${(pain.revenuePotential.estimatedARR / 30000000) * 100}%` }}
-                            transition={{ delay: index * 0.2, duration: 0.5 }}
+                            animate={{ width: `${Math.min((pain.revenuePotential.estimatedARR / 100000000) * 100, 100)}%` }}
+                            transition={{ delay: index * 0.1, duration: 0.5 }}
                           />
                         </div>
                       </div>
                     ))}
+                    {discoveredPains.length === 0 && (
+                      <div className="text-center py-8 text-muted-foreground">
+                        <p>No data available yet</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Pain Distribution by Urgency */}
+                <div className="glass rounded-xl p-6 lg:col-span-2">
+                  <h3 className="font-semibold mb-4">Pain Distribution</h3>
+                  <div className="flex gap-2 flex-wrap">
+                    {discoveredPains.map((pain) => (
+                      <motion.div
+                        key={pain.id}
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        className={`px-3 py-2 rounded-lg text-xs font-medium ${
+                          pain.painScore >= 20 ? 'bg-red-500/20 text-red-400' :
+                          pain.painScore >= 15 ? 'bg-yellow-500/20 text-yellow-400' :
+                          'bg-green-500/20 text-green-400'
+                        }`}
+                      >
+                        {pain.name} ({pain.painScore})
+                      </motion.div>
+                    ))}
+                    {discoveredPains.length === 0 && (
+                      <div className="text-center py-4 text-muted-foreground w-full">
+                        <p>Complete a briefing to see pain distribution</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

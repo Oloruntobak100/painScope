@@ -1,6 +1,15 @@
 import { create } from 'zustand';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
+import {
+  isLocalAuthEnabled,
+  localRegister,
+  localLogin,
+  localLogout,
+  localGetCurrentUser,
+  localUpdateUser,
+  type LocalUser,
+} from '@/lib/localAuth';
 
 export interface User {
   id: string;
@@ -65,6 +74,29 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   setPasswordRecovery: (value) => set({ isPasswordRecovery: value }),
 
   initAuth: () => {
+    // Use local auth on localhost
+    if (isLocalAuthEnabled()) {
+      const localUser = localGetCurrentUser();
+      if (localUser) {
+        set({
+          user: {
+            id: localUser.id,
+            email: localUser.email,
+            name: localUser.name,
+            avatar: localUser.avatar,
+            company: localUser.company,
+            industry: localUser.industry,
+            isVerified: localUser.isVerified,
+            subscription: { plan: 'free', status: 'active' },
+            createdAt: new Date(localUser.createdAt),
+          },
+          isAuthenticated: true,
+        });
+      }
+      return;
+    }
+
+    // Use Supabase in production
     if (!isSupabaseConfigured()) return;
 
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -111,6 +143,33 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   register: async (email, password, name) => {
+    // Use local auth on localhost - skip verification for dev
+    if (isLocalAuthEnabled()) {
+      set({ isLoading: true });
+      const result = localRegister(email, password, name);
+      set({ isLoading: false });
+      
+      if (result.success && result.user) {
+        set({
+          user: {
+            id: result.user.id,
+            email: result.user.email,
+            name: result.user.name,
+            avatar: result.user.avatar,
+            company: result.user.company,
+            industry: result.user.industry,
+            isVerified: result.user.isVerified,
+            subscription: { plan: 'free', status: 'active' },
+            createdAt: new Date(result.user.createdAt),
+          },
+          isAuthenticated: true,
+          pendingVerification: null, // No verification needed for local dev
+        });
+      }
+      return result;
+    }
+
+    // Use Supabase in production
     if (!isSupabaseConfigured()) {
       return { success: false, error: 'Supabase is not configured' };
     }
@@ -138,6 +197,23 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   verifyEmail: async (code) => {
+    // Use hardcoded verification for local dev
+    if (isLocalAuthEnabled()) {
+      const HARDCODED_CODE = '12345'; // Constant code for development
+      
+      if (code !== HARDCODED_CODE) {
+        return { success: false, error: 'Invalid verification code. Use: 12345' };
+      }
+      
+      // Mark as verified (though local auth auto-verifies anyway)
+      const { pendingVerification } = get();
+      if (pendingVerification) {
+        set({ pendingVerification: null, isAuthenticated: true });
+      }
+      return { success: true };
+    }
+
+    // Use Supabase in production
     if (!isSupabaseConfigured()) {
       return { success: false, error: 'Supabase is not configured' };
     }
@@ -162,6 +238,12 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   resendVerification: async (email) => {
+    // For local dev, just return success (no actual email sent)
+    if (isLocalAuthEnabled()) {
+      return { success: true };
+    }
+
+    // Use Supabase in production
     if (!isSupabaseConfigured()) {
       return { success: false, error: 'Supabase is not configured' };
     }
@@ -176,6 +258,32 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   login: async (email, password) => {
+    // Use local auth on localhost
+    if (isLocalAuthEnabled()) {
+      set({ isLoading: true });
+      const result = localLogin(email, password);
+      set({ isLoading: false });
+      
+      if (result.success && result.user) {
+        set({
+          user: {
+            id: result.user.id,
+            email: result.user.email,
+            name: result.user.name,
+            avatar: result.user.avatar,
+            company: result.user.company,
+            industry: result.user.industry,
+            isVerified: result.user.isVerified,
+            subscription: { plan: 'free', status: 'active' },
+            createdAt: new Date(result.user.createdAt),
+          },
+          isAuthenticated: true,
+        });
+      }
+      return result;
+    }
+
+    // Use Supabase in production
     if (!isSupabaseConfigured()) {
       return { success: false, error: 'Supabase is not configured' };
     }
@@ -230,6 +338,14 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   logout: async () => {
+    // Use local auth on localhost
+    if (isLocalAuthEnabled()) {
+      localLogout();
+      set({ user: null, isAuthenticated: false, pendingVerification: null });
+      return;
+    }
+
+    // Use Supabase in production
     if (isSupabaseConfigured()) {
       await supabase.auth.signOut();
     }
@@ -238,7 +354,17 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
   updateUser: async (updates) => {
     const { user } = get();
-    if (!user || !isSupabaseConfigured()) {
+    if (!user) return;
+
+    // Use local auth on localhost
+    if (isLocalAuthEnabled()) {
+      localUpdateUser(user.id, updates);
+      set((s) => ({ user: s.user ? { ...s.user, ...updates } : null }));
+      return;
+    }
+
+    // Use Supabase in production
+    if (!isSupabaseConfigured()) {
       set((s) => ({ user: s.user ? { ...s.user, ...updates } : null }));
       return;
     }
