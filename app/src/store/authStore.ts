@@ -92,6 +92,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
     type ProfileRow = { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null;
 
+    // Use minimal columns first so role (admin) always loads even if email/is_locked columns missing
     const PROFILE_SELECT_MINIMAL = 'name, company, industry, avatar, role';
     const fetchProfileWithRetry = async (userId: string): Promise<ProfileRow> => {
       const run = async (select: string): Promise<ProfileRow> => {
@@ -99,16 +100,14 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         return (res.data as ProfileRow) ?? null;
       };
       try {
-        const data = await run(PROFILE_SELECT);
-        if (data != null) return data;
-      } catch {
-        // Full select may fail if email/is_locked columns missing; retry with minimal so role (admin) loads
-      }
-      try {
-        await new Promise((r) => setTimeout(r, 200));
         return await run(PROFILE_SELECT_MINIMAL);
       } catch {
-        return null;
+        await new Promise((r) => setTimeout(r, 300));
+        try {
+          return await run(PROFILE_SELECT_MINIMAL);
+        } catch {
+          return null;
+        }
       }
     };
 
@@ -124,12 +123,24 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       }
     };
 
-    const markInitialized = () => set({ isInitialized: true });
+    // Single place we mark initialized: after a delay so session restore always has time to run
+    const INIT_DELAY_MS = 2000;
+    let initDone = false;
+    const markInitialized = () => {
+      if (initDone) return;
+      initDone = true;
+      set({ isInitialized: true });
+    };
+
+    const tryRestoreSession = (session: { user: SupabaseUser } | null) => {
+      if (!session?.user) return;
+      void applySession(session);
+    };
 
     // INITIAL_SESSION: Supabase restores session from storage and emits this once
     supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'INITIAL_SESSION') {
-        void applySession(session).then(markInitialized);
+        tryRestoreSession(session);
         return;
       }
       if (event === 'SIGNED_OUT') {
@@ -158,16 +169,17 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       }
     });
 
-    // Fallback: getSession() in case INITIAL_SESSION is delayed or doesn't fire (e.g. some clients)
+    // Restore session: try now and again after 600ms (Supabase may not have rehydrated from storage yet)
     void supabase.auth.getSession().then(({ data: { session } }) => {
-      if (get().isInitialized) return;
-      void applySession(session).then(markInitialized);
+      tryRestoreSession(session);
+      if (session?.user) return;
+      setTimeout(() => {
+        supabase.auth.getSession().then(({ data: { session: session2 } }) => tryRestoreSession(session2));
+      }, 600);
     });
 
-    // Safety: if neither INITIAL_SESSION nor getSession() sets state in time, mark initialized after 4s
-    setTimeout(() => {
-      if (!get().isInitialized) markInitialized();
-    }, 4000);
+    // Only mark initialized after delay so we never redirect before session restore can complete
+    setTimeout(markInitialized, INIT_DELAY_MS);
   },
 
   register: async (email, password, name) => {
