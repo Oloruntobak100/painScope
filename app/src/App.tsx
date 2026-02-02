@@ -123,8 +123,9 @@ function App() {
   };
 
   const renderContent = () => {
-    // Wait for session restore before showing protected routes (avoids redirect flash on refresh)
-    if (!isInitialized && PROTECTED_ROUTES.includes(currentRoute)) {
+    // Wait for session restore before showing protected routes (avoids redirect flash on refresh).
+    // If we're already authenticated (e.g. just signed in), show the app; don't block on init.
+    if (!isInitialized && !isAuthenticated && PROTECTED_ROUTES.includes(currentRoute)) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-background">
           <div className="animate-pulse text-muted-foreground">Loading…</div>

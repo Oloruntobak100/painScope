@@ -117,10 +117,15 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         });
     };
 
-    void supabase.auth.getSession().then(({ data: { session } }) => {
-      applySession(session);
-      set({ isInitialized: true });
-    });
+    void supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        applySession(session);
+      })
+      .then(
+        () => set({ isInitialized: true }),
+        () => set({ isInitialized: true })
+      );
 
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
@@ -132,7 +137,13 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         return;
       }
       if (session?.user) {
-        const { data } = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', session.user.id).single();
+        let data: { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null = null;
+        try {
+          const res = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', session.user.id).single();
+          data = res.data;
+        } catch {
+          // Profile fetch can abort/fail; use auth user only
+        }
         const mapped = mapSupabaseUser(session.user, data);
         if (mapped.isLocked) {
           await supabase.auth.signOut();
