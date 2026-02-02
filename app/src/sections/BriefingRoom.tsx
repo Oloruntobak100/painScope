@@ -28,12 +28,6 @@ import type { ChatMessage, BriefingData } from '@/types';
 // Default webhook URL for PainScope research
 const N8N_WEBHOOK_URL = 'https://northsnow.app.n8n.cloud/webhook/painScope';
 
-interface N8nChatResponse {
-  reply?: string;
-  extractedData?: Partial<BriefingData>;
-  nextQuestion?: string;
-}
-
 interface BriefingRoomProps {
   onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings') => void;
   currentRoute: string;
@@ -231,10 +225,6 @@ export default function BriefingRoom({ onNavigate }: BriefingRoomProps) {
     } else {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
     }
-  };
-
-  const handleLaunchScouts = () => {
-    setShowFinalForm(true);
   };
 
   const handleConfirmLaunch = async () => {

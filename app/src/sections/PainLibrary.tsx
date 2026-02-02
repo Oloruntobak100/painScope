@@ -71,13 +71,14 @@ function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[
 }
 
 /** Normalize webhook pain item (may use camelCase/snake_case, string dates) to PainArchetype */
-function normalizePainArchetype(p: Record<string, unknown>): PainArchetype {
-  const id = (p.id as string) ?? `pain-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+function normalizePainArchetype(p: PainArchetype | Record<string, unknown>): PainArchetype {
+  const r = p as Record<string, unknown>;
+  const id = (r.id as string) ?? `pain-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   
   // Handle both sources array and topSource object from n8n
   let sources: PainSource[] = [];
-  if (Array.isArray(p.sources)) {
-    sources = (p.sources as Record<string, unknown>[]).map((s, i) => ({
+  if (Array.isArray(r.sources)) {
+    sources = (r.sources as Record<string, unknown>[]).map((s, i) => ({
       id: (s.id as string) ?? `s-${i}`,
       url: (s.url as string) ?? '',
       title: (s.title as string) ?? '',
@@ -86,21 +87,21 @@ function normalizePainArchetype(p: Record<string, unknown>): PainArchetype {
       sentiment: ((s.sentiment as string) ?? 'neutral') as PainSource['sentiment'],
       date: s.date ? new Date(s.date as string | number) : new Date(),
     }));
-  } else if (p.topSource && typeof p.topSource === 'object') {
-    const ts = p.topSource as Record<string, unknown>;
+  } else if (r.topSource && typeof r.topSource === 'object') {
+    const ts = r.topSource as Record<string, unknown>;
     sources = [{
       id: 's-0',
       url: (ts.url as string) ?? '',
       title: (ts.title as string) ?? (ts.name as string) ?? '',
       platform: ((ts.name as string)?.toLowerCase() === 'web' ? 'forum' : (ts.name as string)?.toLowerCase() === 'news' ? 'news' : 'forum') as PainSource['platform'],
-      snippet: (p.description as string) ?? '',
+      snippet: (r.description as string) ?? '',
       sentiment: 'negative' as const,
-      date: p.timestamp ? new Date(p.timestamp as string) : new Date(),
+      date: r.timestamp ? new Date(r.timestamp as string) : new Date(),
     }];
   }
   
   // Handle revenuePotential from n8n (estimate/raw/label only; no tam/sam/som - derive to avoid NaN)
-  const rev = (p.revenuePotential ?? p.revenue_potential) as Record<string, unknown> | undefined;
+  const rev = (r.revenuePotential ?? r.revenue_potential) as Record<string, unknown> | undefined;
   const revRaw = rev?.raw != null ? Number(rev.raw) : (rev?.estimatedARR ?? rev?.estimated_arr != null ? Number(rev.estimatedARR ?? rev.estimated_arr) : 0);
   const revNum = Number.isFinite(revRaw) ? revRaw : 0;
   const tam = Number(rev?.tam);
@@ -108,24 +109,24 @@ function normalizePainArchetype(p: Record<string, unknown>): PainArchetype {
   const som = Number(rev?.som);
   const conf = Number(rev?.confidence);
 
-  const tags = Array.isArray(p.tags) ? (p.tags as string[]) : [];
-  const hist = Array.isArray(p.frequencyHistory)
-    ? (p.frequencyHistory as number[])
-    : Array.isArray(p.frequency_history)
-      ? (p.frequency_history as number[])
+  const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
+  const hist = Array.isArray(r.frequencyHistory)
+    ? (r.frequencyHistory as number[])
+    : Array.isArray(r.frequency_history)
+      ? (r.frequency_history as number[])
       : [];
   
-  const painScore = Number(p.painScore ?? p.pain_score) ?? 0;
+  const painScore = Number(r.painScore ?? r.pain_score) ?? 0;
   
   return {
     id,
-    name: (p.archetype as string) ?? (p.name as string) ?? '',
-    description: (p.description as string) ?? '',
+    name: (r.archetype as string) ?? (r.name as string) ?? '',
+    description: (r.description as string) ?? '',
     painScore,
-    severity: Number(p.severity) ?? 0,
-    frequency: Number(p.frequency) ?? 0,
-    urgency: Number(p.urgency) ?? 0,
-    competitiveSaturation: Number(p.competitiveSaturation ?? p.competitive_saturation) ?? 0,
+    severity: Number(r.severity) ?? 0,
+    frequency: Number(r.frequency) ?? 0,
+    urgency: Number(r.urgency) ?? 0,
+    competitiveSaturation: Number(r.competitiveSaturation ?? r.competitive_saturation) ?? 0,
     sources,
     revenuePotential: {
       tam: Number.isFinite(tam) ? tam : revNum * 10,
@@ -135,11 +136,11 @@ function normalizePainArchetype(p: Record<string, unknown>): PainArchetype {
       confidence: Number.isFinite(conf) ? conf : 0.7,
     },
     tags,
-    createdAt: p.createdAt || p.created_at || p.timestamp ? new Date((p.createdAt ?? p.created_at ?? p.timestamp) as string | number) : new Date(),
+    createdAt: r.createdAt || r.created_at || r.timestamp ? new Date((r.createdAt ?? r.created_at ?? r.timestamp) as string | number) : new Date(),
     frequencyHistory: hist.length ? hist : [painScore * 0.5, painScore * 0.6, painScore * 0.7, painScore * 0.8, painScore * 0.9, painScore],
-    opportunityNote: typeof p.opportunityNote === 'string' ? p.opportunityNote : undefined,
-    existingSolutions: typeof p.existingSolutions === 'string' ? p.existingSolutions : undefined,
-    quotes: Array.isArray(p.quotes) ? (p.quotes as string[]) : undefined,
+    opportunityNote: typeof r.opportunityNote === 'string' ? r.opportunityNote : undefined,
+    existingSolutions: typeof r.existingSolutions === 'string' ? r.existingSolutions : undefined,
+    quotes: Array.isArray(r.quotes) ? (r.quotes as string[]) : undefined,
   };
 }
 

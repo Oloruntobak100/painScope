@@ -13,6 +13,7 @@ import type {
   PainFilter,
   WebhookDashboardMetrics,
   RecentDiscoveryItem,
+  ReportHistory,
 } from '@/types';
 
 // Briefing Store

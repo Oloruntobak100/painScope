@@ -30,31 +30,6 @@ interface ScoutLabProps {
   currentRoute: string;
 }
 
-// Calculate PainScore
-const calculatePainScore = (
-  severity: number,
-  frequency: number,
-  urgency: number,
-  competitiveSaturation: number,
-  weights = { w1: 0.4, w2: 0.3, w3: 0.3 }
-): number => {
-  const weightedSum = (severity * weights.w1) + (frequency * weights.w2) + (urgency * weights.w3);
-  const score = weightedSum / Math.max(competitiveSaturation, 0.1);
-  return Math.min(Math.round(score * 10), 100);
-};
-
-// Mock agent logs
-const generateMockLogs = (agentId: string): AgentLog[] => [
-  { id: '1', timestamp: new Date(Date.now() - 1000 * 60 * 5), level: 'info', message: 'Agent initialized', metadata: { agentId } },
-  { id: '2', timestamp: new Date(Date.now() - 1000 * 60 * 4), level: 'info', message: 'Connecting to data sources...', metadata: {} },
-  { id: '3', timestamp: new Date(Date.now() - 1000 * 60 * 3), level: 'success', message: 'Connected to Reddit API', metadata: { platform: 'reddit' } },
-  { id: '4', timestamp: new Date(Date.now() - 1000 * 60 * 2), level: 'info', message: 'Crawling r/fintech for pain mentions...', metadata: { subreddit: 'fintech' } },
-  { id: '5', timestamp: new Date(Date.now() - 1000 * 60 * 1), level: 'success', message: 'Found 23 potential pain points', metadata: { count: 23 } },
-  { id: '6', timestamp: new Date(Date.now() - 1000 * 30), level: 'info', message: 'Clustering sentiments using NLP...', metadata: {} },
-  { id: '7', timestamp: new Date(Date.now() - 1000 * 15), level: 'success', message: 'Identified 5 pain archetypes', metadata: { archetypes: 5 } },
-  { id: '8', timestamp: new Date(), level: 'info', message: 'Scoring pains by severity, frequency, urgency...', metadata: {} },
-];
-
 // Dummy crawl lines shown after briefing submit (n8n + FireCrawl workflow running)
 const CRAWL_FROM_BRIEFING_LOGS: { level: AgentLog['level']; message: string }[] = [
   { level: 'info', message: 'Initializing FireCrawl pipeline...' },
@@ -73,62 +48,6 @@ const CRAWL_FROM_BRIEFING_LOGS: { level: AgentLog['level']; message: string }[] 
   { level: 'success', message: 'PainScore matrix computed' },
   { level: 'info', message: 'Estimating revenue potential (TAM/SAM/SOM)...' },
   { level: 'success', message: 'Discovery complete. Sending results to Library.' },
-];
-
-// Mock discovered pains
-const generateMockPains = (): PainArchetype[] => [
-  {
-    id: 'pain-1',
-    name: 'Payment friction in B2B invoices',
-    description: 'Businesses struggle with manual invoice processing, delayed payments, and lack of visibility into payment status.',
-    painScore: calculatePainScore(8.5, 7.2, 8.0, 2.1),
-    severity: 8.5,
-    frequency: 7.2,
-    urgency: 8.0,
-    competitiveSaturation: 2.1,
-    sources: [
-      { id: 's1', url: 'https://reddit.com/r/fintech/comments/abc123', title: 'Invoice pain points', platform: 'reddit', snippet: 'We spend 20 hours a week just processing invoices...', sentiment: 'negative', date: new Date() },
-      { id: 's2', url: 'https://twitter.com/user/status/123', title: 'B2B payment rant', platform: 'twitter', snippet: 'Why is paying vendors still so hard in 2025?', sentiment: 'negative', date: new Date() },
-    ],
-    revenuePotential: { tam: 50000000000, sam: 12000000000, som: 500000000, estimatedARR: 25000000, confidence: 0.78 },
-    tags: ['payments', 'b2b', 'invoicing', 'automation'],
-    createdAt: new Date(),
-    frequencyHistory: [45, 52, 48, 61, 72, 87],
-  },
-  {
-    id: 'pain-2',
-    name: 'Lack of real-time collaboration',
-    description: 'Remote teams need better tools for synchronous document editing and decision-making.',
-    painScore: calculatePainScore(7.8, 8.5, 6.5, 4.2),
-    severity: 7.8,
-    frequency: 8.5,
-    urgency: 6.5,
-    competitiveSaturation: 4.2,
-    sources: [
-      { id: 's3', url: 'https://news.ycombinator.com/item?id=123', title: 'Collaboration tools discussion', platform: 'forum', snippet: 'Still waiting for the perfect real-time collaboration tool...', sentiment: 'negative', date: new Date() },
-    ],
-    revenuePotential: { tam: 35000000000, sam: 8000000000, som: 300000000, estimatedARR: 15000000, confidence: 0.65 },
-    tags: ['collaboration', 'remote-work', 'productivity'],
-    createdAt: new Date(),
-    frequencyHistory: [30, 35, 42, 55, 68, 76],
-  },
-  {
-    id: 'pain-3',
-    name: 'Complex onboarding flows',
-    description: 'Users abandon products due to lengthy and confusing onboarding experiences.',
-    painScore: calculatePainScore(7.2, 6.8, 7.5, 3.5),
-    severity: 7.2,
-    frequency: 6.8,
-    urgency: 7.5,
-    competitiveSaturation: 3.5,
-    sources: [
-      { id: 's4', url: 'https://g2.com/reviews/saas-product', title: 'User review', platform: 'review', snippet: 'Great product but onboarding took way too long', sentiment: 'negative', date: new Date() },
-    ],
-    revenuePotential: { tam: 20000000000, sam: 5000000000, som: 200000000, estimatedARR: 10000000, confidence: 0.72 },
-    tags: ['onboarding', 'ux', 'retention'],
-    createdAt: new Date(),
-    frequencyHistory: [25, 32, 38, 45, 58, 71],
-  },
 ];
 
 function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[]): PainArchetype {

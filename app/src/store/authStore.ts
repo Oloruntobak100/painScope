@@ -8,7 +8,6 @@ import {
   localLogout,
   localGetCurrentUser,
   localUpdateUser,
-  type LocalUser,
 } from '@/lib/localAuth';
 
 export interface User {
@@ -99,27 +98,32 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
     // Use Supabase in production
     if (!isSupabaseConfigured()) return;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        supabase
-          .from('profiles')
-          .select('name, company, industry, avatar')
-          .eq('id', session.user.id)
-          .single()
-          .then(({ data }) => {
-            set({
-              user: mapSupabaseUser(session.user, data),
-              isAuthenticated: true,
+    void Promise.resolve(supabase.auth.getSession()).then(
+      ({ data: { session } }) => {
+        if (session?.user) {
+          void Promise.resolve(
+            supabase
+              .from('profiles')
+              .select('name, company, industry, avatar')
+              .eq('id', session.user.id)
+              .single()
+          )
+            .then(({ data }) => {
+              set({
+                user: mapSupabaseUser(session.user, data),
+                isAuthenticated: true,
+              });
+            })
+            .catch(() => {
+              set({
+                user: mapSupabaseUser(session.user),
+                isAuthenticated: true,
+              });
             });
-          })
-          .catch(() => {
-            set({
-              user: mapSupabaseUser(session.user),
-              isAuthenticated: true,
-            });
-          });
-      }
-    });
+        }
+      },
+      () => {}
+    );
 
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
