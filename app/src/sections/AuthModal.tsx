@@ -30,7 +30,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialMode = 's
   const [signUpEmail, setSignUpEmail] = useState('');
   const [signUpPassword, setSignUpPassword] = useState('');
   const [signUpConfirm, setSignUpConfirm] = useState('');
-  const [verificationCode, setVerificationCode] = useState(['', '', '', '', '', '']);
+  const [verificationCode, setVerificationCode] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotEmailSent, setForgotEmailSent] = useState(false);
   const [newPassword, setNewPassword] = useState('');
@@ -45,22 +45,6 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialMode = 's
     }
   }, [isOpen, initialMode, isPasswordRecovery]);
 
-
-  const handleCodeChange = (index: number, value: string) => {
-    if (value.length > 1) return;
-    const newArr = [...verificationCode];
-    newArr[index] = value.toUpperCase();
-    setVerificationCode(newArr);
-    if (value && index < 5) {
-      document.getElementById(`verify-${index + 1}`)?.focus();
-    }
-  };
-
-  const handleCodeKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !verificationCode[index] && index > 0) {
-      document.getElementById(`verify-${index - 1}`)?.focus();
-    }
-  };
 
   const handleSignIn = async () => {
     setError('');
@@ -97,9 +81,9 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialMode = 's
 
   const handleVerify = async () => {
     setError('');
-    const code = verificationCode.join('');
-    if (code.length !== 6) {
-      setError('Enter complete code');
+    const code = verificationCode.trim().replace(/\s/g, '');
+    if (!code) {
+      setError('Enter or paste your verification code');
       return;
     }
     const result = await verifyEmail(code);
@@ -165,7 +149,7 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialMode = 's
     setView('signin'); setError(''); setSuccessMessage('');
     setSignInEmail(''); setSignInPassword('');
     setSignUpName(''); setSignUpEmail(''); setSignUpPassword(''); setSignUpConfirm('');
-    setVerificationCode(['', '', '', '', '', '']);
+    setVerificationCode('');
     setForgotEmail(''); setForgotEmailSent(false); setNewPassword('');
     onClose();
   };
@@ -329,15 +313,20 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialMode = 's
                       <Mail className="w-8 h-8 text-cyan" />
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      We&apos;ve sent a 6-digit verification code to<br /><span className="text-cyan font-mono">{pendingVerification || signUpEmail}</span>
+                      We&apos;ve sent a verification code to<br /><span className="text-cyan font-mono">{pendingVerification || signUpEmail}</span>
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">Enter the 6-digit code below</p>
+                    <p className="text-xs text-muted-foreground mt-1">Paste or type the code from your email below</p>
                   </div>
-                  <div className="flex justify-center gap-2">
-                    {verificationCode.map((d, i) => (
-                      <Input key={i} id={`verify-${i}`} type="text" maxLength={1} value={d} onChange={(e) => handleCodeChange(i, e.target.value)} onKeyDown={(e) => handleCodeKeyDown(i, e)} className="w-12 h-14 text-center text-2xl font-mono font-bold bg-black/40 border-cyan/30 focus:border-cyan" />
-                    ))}
-                  </div>
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    placeholder="Paste your verification code"
+                    value={verificationCode}
+                    onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+                    className="w-full h-14 text-center text-xl font-mono bg-black/40 border-cyan/30 focus:border-cyan"
+                    maxLength={12}
+                  />
                   <Button className="w-full btn-cyber-primary py-6" onClick={handleVerify} disabled={isLoading}>
                     {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <>{'Verify Email'}<Check className="w-5 h-5 ml-2" /></>}
                   </Button>
