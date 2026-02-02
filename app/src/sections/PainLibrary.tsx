@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/select';
 import { useAuthStore, usePainLibraryStore, useBriefingStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { loadReportHistory } from '@/lib/reportSupabase';
 import type { PainArchetype, PainSource } from '@/types';
 
 function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[]): PainArchetype {
@@ -172,8 +173,16 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
   const [fullReportContent, setFullReportContent] = useState<string | null>(null);
   const itemsPerPage = 10;
   const { user } = useAuthStore();
-  const { researchResult, setResearchResult, reportHistory } = useBriefingStore();
+  const { researchResult, setResearchResult, reportHistory, setReportHistory } = useBriefingStore();
   const { setPains: setStorePains } = usePainLibraryStore();
+
+  // Hydrate report history from Supabase when empty (e.g. direct nav to Library)
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !user?.id || reportHistory.length > 0) return;
+    loadReportHistory(user.id).then((entries) => {
+      if (entries.length > 0) setReportHistory(entries);
+    });
+  }, [user?.id, reportHistory.length, setReportHistory]);
 
   const fetchPains = useCallback(async () => {
     if (!isSupabaseConfigured() || !user) return;

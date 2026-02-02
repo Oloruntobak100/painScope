@@ -24,6 +24,7 @@ import { Progress } from '@/components/ui/progress';
 import { useAuthStore } from '@/store/authStore';
 import { useAgentStore, usePainLibraryStore, useBriefingStore, useUIStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { loadReportHistory } from '@/lib/reportSupabase';
 import type { Notification } from '@/store';
 
 interface DashboardProps {
@@ -76,8 +77,16 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
   const { user, logout } = useAuthStore();
   const { agents } = useAgentStore();
   const { pains } = usePainLibraryStore();
-  const { dashboardMetrics, recentDiscoveries, reportHistory } = useBriefingStore();
+  const { dashboardMetrics, recentDiscoveries, reportHistory, setReportHistory } = useBriefingStore();
   const { notifications: uiNotifications, markNotificationRead, markAllNotificationsRead } = useUIStore();
+
+  // Hydrate report history from Supabase on load (so it survives refresh)
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !user?.id) return;
+    loadReportHistory(user.id).then((entries) => {
+      if (entries.length > 0) setReportHistory(entries);
+    });
+  }, [user?.id, setReportHistory]);
 
   // Prefer webhook dashboard data when available
   useEffect(() => {

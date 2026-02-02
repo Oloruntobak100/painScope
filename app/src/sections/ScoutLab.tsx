@@ -3,27 +3,20 @@ import { motion } from 'framer-motion';
 import {
   Terminal,
   RotateCcw,
-  Search,
-  Globe,
-  MessageSquare,
-  Newspaper,
   AlertTriangle,
-  TrendingUp,
   Clock,
   CheckCircle,
   XCircle,
   Loader2,
   Zap,
   ChevronRight,
-  BarChart3,
   FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useBriefingStore, useAuthStore, useUIStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import type { AgentLog, PainArchetype, PainSource } from '@/types';
+import { persistReportAndPainsToSupabase } from '@/lib/reportSupabase';
+import type { AgentLog } from '@/types';
 
 interface ScoutLabProps {
   onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings', queryParams?: Record<string, string>) => void;
@@ -50,82 +43,15 @@ const CRAWL_FROM_BRIEFING_LOGS: { level: AgentLog['level']; message: string }[] 
   { level: 'success', message: 'Discovery complete. Sending results to Library.' },
 ];
 
-function mapDbPainToArchetype(row: Record<string, unknown>, sources: PainSource[]): PainArchetype {
-  const tags = Array.isArray(row.tags) ? (row.tags as string[]) : [];
-  const hist = Array.isArray(row.frequency_history) ? (row.frequency_history as number[]) : [];
-  return {
-    id: row.id as string,
-    name: (row.name as string) ?? '',
-    description: (row.description as string) ?? '',
-    painScore: Number(row.pain_score) ?? 0,
-    severity: Number(row.severity) ?? 0,
-    frequency: Number(row.frequency) ?? 0,
-    urgency: Number(row.urgency) ?? 0,
-    competitiveSaturation: Number(row.competitive_saturation) ?? 0,
-    sources,
-    revenuePotential: {
-      tam: Number(row.tam) ?? 0,
-      sam: Number(row.sam) ?? 0,
-      som: Number(row.som) ?? 0,
-      estimatedARR: Number(row.estimated_arr) ?? 0,
-      confidence: Number(row.confidence) ?? 0,
-    },
-    tags,
-    createdAt: new Date((row.created_at as string) ?? Date.now()),
-    frequencyHistory: hist,
-  };
-}
-
-/** Normalize webhook pain item for ScoutLab display */
-function normalizeWebhookPain(p: Record<string, unknown>): PainArchetype {
-  const id = (p.id as string) ?? `pain-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  const ts = p.topSource as Record<string, unknown> | undefined;
-  const sources: PainSource[] = ts ? [{
-    id: 's-0',
-    url: (ts.url as string) ?? '',
-    title: (ts.title as string) ?? (ts.name as string) ?? '',
-    platform: ((ts.name as string)?.toLowerCase() === 'web' ? 'forum' : (ts.name as string)?.toLowerCase() === 'news' ? 'news' : 'forum') as PainSource['platform'],
-    snippet: (p.description as string) ?? '',
-    sentiment: 'negative' as const,
-    date: p.timestamp ? new Date(p.timestamp as string) : new Date(),
-  }] : [];
-  const rev = p.revenuePotential as Record<string, unknown> | undefined;
-  const revRaw = rev?.raw ? Number(rev.raw) : 0;
-  const painScore = Number(p.painScore ?? p.pain_score) ?? 0;
-  return {
-    id,
-    name: (p.archetype as string) ?? (p.name as string) ?? '',
-    description: (p.description as string) ?? '',
-    painScore,
-    severity: Number(p.severity) ?? 0,
-    frequency: Number(p.frequency) ?? 0,
-    urgency: Number(p.urgency) ?? 0,
-    competitiveSaturation: Number(p.competitiveSaturation ?? p.competitive_saturation) ?? 0,
-    sources,
-    revenuePotential: {
-      tam: revRaw * 10,
-      sam: revRaw * 2.5,
-      som: revRaw * 0.5,
-      estimatedARR: revRaw,
-      confidence: 0.7,
-    },
-    tags: Array.isArray(p.tags) ? (p.tags as string[]) : [],
-    createdAt: p.timestamp ? new Date(p.timestamp as string) : new Date(),
-    frequencyHistory: [painScore * 0.5, painScore * 0.6, painScore * 0.7, painScore * 0.8, painScore * 0.9, painScore],
-  };
-}
-
 export default function ScoutLab({ onNavigate }: ScoutLabProps) {
-  const [activeTab, setActiveTab] = useState('terminal');
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [logs, setLogs] = useState<AgentLog[]>([]);
-  const [discoveredPains, setDiscoveredPains] = useState<PainArchetype[]>([]);
   const [currentTask, setCurrentTask] = useState('');
   const [crawlFromBriefingDone, setCrawlFromBriefingDone] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const { isComplete: briefingComplete, briefingData, researchWebhookPromise, researchResult, reportHistory, dashboardMetrics, setResearchWebhookPromise, setWebhookPayload } = useBriefingStore();
+  const { isComplete: briefingComplete, briefingData, briefingId, researchWebhookPromise, researchResult, reportHistory, setResearchWebhookPromise, setWebhookPayload } = useBriefingStore();
   const { user } = useAuthStore();
   const { addNotification } = useUIStore();
 
@@ -142,7 +68,6 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
       const payload = researchResult as Record<string, unknown>;
       const pains = (payload.painLibrary ?? payload.pains) as Record<string, unknown>[] | undefined;
       if (Array.isArray(pains) && pains.length > 0) {
-        setDiscoveredPains(pains.map(normalizeWebhookPain));
         setProgress(100);
         setIsRunning(false);
         const metrics = payload.dashboardMetrics as Record<string, unknown> | undefined;
@@ -178,7 +103,6 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
       setIsRunning(false);
       setCurrentTask('No active crawl. Start a briefing to begin discovery.');
       setLogs([]);
-      setDiscoveredPains([]);
     }
   }, [isActivelyCrawling, researchResult, reportHistory]);
 
@@ -213,30 +137,6 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
     const running = (job.status as string) === 'running';
     setIsRunning(running);
 
-    const { data: painRows } = await supabase
-      .from('pain_archetypes')
-      .select('*')
-      .eq('agent_job_id', job.id);
-    if (painRows && painRows.length > 0) {
-      const pains: PainArchetype[] = [];
-      for (const p of painRows) {
-        const { data: srcRows } = await supabase
-          .from('pain_sources')
-          .select('*')
-          .eq('pain_archetype_id', p.id);
-        const sources: PainSource[] = (srcRows ?? []).map((s) => ({
-          id: s.id,
-          url: s.url ?? '',
-          title: (s.title as string) ?? '',
-          platform: (s.platform as PainSource['platform']) ?? 'forum',
-          snippet: (s.snippet as string) ?? '',
-          sentiment: (s.sentiment as PainSource['sentiment']) ?? 'neutral',
-          date: new Date((s.source_date as string) ?? Date.now()),
-        }));
-        pains.push(mapDbPainToArchetype(p, sources));
-      }
-      setDiscoveredPains(pains);
-    }
     return true;
   }, [user]);
 
@@ -249,7 +149,6 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
     setLogs([]);
     setProgress(0);
     setCurrentTask('Initializing FireCrawl pipeline...');
-    setDiscoveredPains([]);
 
     const promise = researchWebhookPromise;
     if (!promise) {
@@ -284,7 +183,10 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
         if (cancelled) return;
         clearInterval(iv);
         setResearchWebhookPromise(null);
-        if (data != null) setWebhookPayload(data);
+        if (data != null) {
+          setWebhookPayload(data);
+          persistReportAndPainsToSupabase(user?.id ?? '', briefingId ?? null, data).catch(console.error);
+        }
         setLogs((prev) => [
           ...prev,
           {
@@ -347,19 +249,6 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
         return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
       default:
         return <Clock className="w-4 h-4 text-blue-500" />;
-    }
-  };
-
-  const getPlatformIcon = (platform: string) => {
-    switch (platform) {
-      case 'reddit':
-        return <MessageSquare className="w-4 h-4" />;
-      case 'twitter':
-        return <TrendingUp className="w-4 h-4" />;
-      case 'news':
-        return <Newspaper className="w-4 h-4" />;
-      default:
-        return <Globe className="w-4 h-4" />;
     }
   };
 
@@ -478,236 +367,70 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
             </div>
           )}
 
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1">
-            <TabsList className="mb-4">
-              <TabsTrigger value="terminal" className="gap-2">
-                <Terminal className="w-4 h-4" />
-                Terminal
-              </TabsTrigger>
-              <TabsTrigger value="discovered" className="gap-2">
-                <Search className="w-4 h-4" />
-                Discovered
-                {discoveredPains.length > 0 && (
-                  <Badge variant="secondary" className="ml-1">{discoveredPains.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="visualization" className="gap-2">
-                <BarChart3 className="w-4 h-4" />
-                Visualization
-              </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="terminal" className="mt-0">
-              <div className="glass rounded-xl p-4 font-mono text-sm h-[500px] overflow-y-auto scrollbar-thin">
-                <div className="space-y-2">
-                  {logs.map((log, index) => (
-                    <motion.div
-                      key={log.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05 }}
-                      className="flex items-start gap-3"
-                    >
-                      <span className="text-muted-foreground text-xs whitespace-nowrap">
-                        {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </span>
-                      {getLogIcon(log.level)}
-                      <span className={`
-                        ${log.level === 'success' ? 'text-green-400' : ''}
-                        ${log.level === 'error' ? 'text-red-400' : ''}
-                        ${log.level === 'warning' ? 'text-yellow-400' : ''}
-                        ${log.level === 'info' ? 'text-blue-400' : ''}
-                      `}>
-                        {log.message}
-                      </span>
-                    </motion.div>
-                  ))}
-                  {isRunning && (
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 bg-lime rounded-full animate-pulse" />
-                      <span className="text-lime animate-pulse">_</span>
-                    </div>
-                  )}
-                  <div ref={logsEndRef} />
-                </div>
+          {/* Terminal - single view; empty state when no active job */}
+          <div className="glass rounded-xl p-4 font-mono text-sm min-h-[320px] max-h-[500px] overflow-y-auto scrollbar-thin">
+            {logs.length === 0 && !isRunning && !researchWebhookPromise ? (
+              <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                <Terminal className="w-14 h-14 text-muted-foreground/60 mb-4" />
+                <p className="text-muted-foreground font-medium mb-1">There’s no active crawling job</p>
+                <p className="text-sm text-muted-foreground/80 mb-6 max-w-sm">
+                  Complete a briefing and start research to run a scout. Results will appear here and in Pain Library.
+                </p>
+                <Button
+                  onClick={() => onNavigate('briefing')}
+                  className="bg-lime text-background hover:bg-lime-light"
+                >
+                  <Zap className="w-4 h-4 mr-2" />
+                  Go to Briefing
+                </Button>
               </div>
-            </TabsContent>
-
-            <TabsContent value="discovered" className="mt-0">
-              <div className="grid gap-4">
-                {discoveredPains.map((pain, index) => (
+            ) : (
+              <div className="space-y-2">
+                {logs.map((log, index) => (
                   <motion.div
-                    key={pain.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.1 }}
-                    className="glass rounded-xl p-6 card-hover"
+                    key={log.id}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: index * 0.05 }}
+                    className="flex items-start gap-3"
                   >
-                    <div className="flex items-start justify-between mb-4">
-                      <div>
-                        <h3 className="font-semibold text-lg mb-1">{pain.name}</h3>
-                        <p className="text-sm text-muted-foreground">{pain.description}</p>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-3xl font-bold text-lime">{pain.painScore}</div>
-                        <p className="text-xs text-muted-foreground">PainScore</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-4 mb-4">
-                      <ScoreBadge label="Severity" value={pain.severity} />
-                      <ScoreBadge label="Frequency" value={pain.frequency} />
-                      <ScoreBadge label="Urgency" value={pain.urgency} />
-                      <ScoreBadge label="Competition" value={pain.competitiveSaturation} />
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        {pain.sources.map((source, i) => (
-                          <Badge key={i} variant="secondary" className="gap-1">
-                            {getPlatformIcon(source.platform)}
-                            {source.platform}
-                          </Badge>
-                        ))}
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-medium">${(pain.revenuePotential.estimatedARR / 1000000).toFixed(1)}M</p>
-                        <p className="text-xs text-muted-foreground">Est. ARR</p>
-                      </div>
-                    </div>
+                    <span className="text-muted-foreground text-xs whitespace-nowrap">
+                      {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                    {getLogIcon(log.level)}
+                    <span className={`
+                      ${log.level === 'success' ? 'text-green-400' : ''}
+                      ${log.level === 'error' ? 'text-red-400' : ''}
+                      ${log.level === 'warning' ? 'text-yellow-400' : ''}
+                      ${log.level === 'info' ? 'text-blue-400' : ''}
+                    `}>
+                      {log.message}
+                    </span>
                   </motion.div>
                 ))}
-
-                {discoveredPains.length === 0 && (
-                  <div className="text-center py-12 text-muted-foreground">
-                    <Search className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p className="mb-2">{isRunning ? 'Discovering pains...' : 'No pain data available'}</p>
-                    {!isRunning && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onNavigate('briefing')}
-                        className="mt-4"
-                      >
-                        <Zap className="w-4 h-4 mr-2" />
-                        Start New Briefing
-                      </Button>
-                    )}
+                {isRunning && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 bg-lime rounded-full animate-pulse" />
+                    <span className="text-lime animate-pulse">_</span>
                   </div>
                 )}
+                <div ref={logsEndRef} />
               </div>
-            </TabsContent>
+            )}
+          </div>
 
-            <TabsContent value="visualization" className="mt-0">
-              <div className="grid lg:grid-cols-2 gap-6">
-                {/* Key Metrics Summary */}
-                <div className="glass rounded-xl p-6 lg:col-span-2">
-                  <h3 className="font-semibold mb-4">Discovery Metrics</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="p-4 rounded-lg bg-lime/10 text-center">
-                      <p className="text-3xl font-bold text-lime">{discoveredPains.length}</p>
-                      <p className="text-xs text-muted-foreground">Pains Discovered</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-secondary/30 text-center">
-                      <p className="text-3xl font-bold">{discoveredPains.length > 0 ? Math.round(discoveredPains.reduce((a, p) => a + p.painScore, 0) / discoveredPains.length) : 0}</p>
-                      <p className="text-xs text-muted-foreground">Avg PainScore</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-secondary/30 text-center">
-                      <p className="text-3xl font-bold">{dashboardMetrics?.sourcesAnalyzed ?? 0}</p>
-                      <p className="text-xs text-muted-foreground">Sources Analyzed</p>
-                    </div>
-                    <div className="p-4 rounded-lg bg-secondary/30 text-center">
-                      <p className="text-3xl font-bold">${discoveredPains.length > 0 ? (discoveredPains.reduce((a, p) => a + p.revenuePotential.estimatedARR, 0) / 1000000).toFixed(0) : 0}M</p>
-                      <p className="text-xs text-muted-foreground">Total Est. ARR</p>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* PainScore Radar */}
-                <div className="glass rounded-xl p-6">
-                  <h3 className="font-semibold mb-4">Pain Intensity Matrix</h3>
-                  <div className="h-[300px] flex items-center justify-center">
-                    <PainRadar pains={discoveredPains} />
-                  </div>
-                </div>
-
-                {/* Revenue Potential */}
-                <div className="glass rounded-xl p-6">
-                  <h3 className="font-semibold mb-4">Revenue Potential by Pain</h3>
-                  <div className="space-y-4 max-h-[300px] overflow-y-auto">
-                    {discoveredPains.slice(0, 8).map((pain, index) => (
-                      <div key={pain.id}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm truncate max-w-[200px]">{pain.name}</span>
-                          <span className="text-sm font-medium text-lime">${(pain.revenuePotential.estimatedARR / 1000000).toFixed(1)}M</span>
-                        </div>
-                        <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                          <motion.div
-                            className="h-full bg-gradient-to-r from-lime to-lime-light"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min((pain.revenuePotential.estimatedARR / 100000000) * 100, 100)}%` }}
-                            transition={{ delay: index * 0.1, duration: 0.5 }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                    {discoveredPains.length === 0 && (
-                      <div className="text-center py-8 text-muted-foreground">
-                        <p>No data available yet</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                {/* Pain Distribution by Urgency */}
-                <div className="glass rounded-xl p-6 lg:col-span-2">
-                  <h3 className="font-semibold mb-4">Pain Distribution</h3>
-                  <div className="flex gap-2 flex-wrap">
-                    {discoveredPains.map((pain) => (
-                      <motion.div
-                        key={pain.id}
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        className={`px-3 py-2 rounded-lg text-xs font-medium ${
-                          pain.painScore >= 20 ? 'bg-red-500/20 text-red-400' :
-                          pain.painScore >= 15 ? 'bg-yellow-500/20 text-yellow-400' :
-                          'bg-green-500/20 text-green-400'
-                        }`}
-                      >
-                        {pain.name} ({pain.painScore})
-                      </motion.div>
-                    ))}
-                    {discoveredPains.length === 0 && (
-                      <div className="text-center py-4 text-muted-foreground w-full">
-                        <p>Complete a briefing to see pain distribution</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </TabsContent>
-          </Tabs>
-
-          {/* Action Buttons */}
-          {!isRunning && discoveredPains.length > 0 && (
+          {/* Action: go to Library when we have report history */}
+          {!isRunning && reportHistory.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mt-6 flex justify-end gap-3"
+              className="mt-6 flex justify-end"
             >
-              <Button
-                variant="outline"
-                onClick={() => onNavigate('briefing')}
-              >
-                <RotateCcw className="w-4 h-4 mr-2" />
-                New Briefing
-              </Button>
               <Button
                 onClick={() => onNavigate('library')}
                 className="bg-lime text-background hover:bg-lime-light"
               >
-                <Zap className="w-4 h-4 mr-2" />
-                View in Library
+                View in Pain Library
                 <ChevronRight className="w-4 h-4 ml-2" />
               </Button>
             </motion.div>
@@ -715,125 +438,5 @@ export default function ScoutLab({ onNavigate }: ScoutLabProps) {
         </div>
       </div>
     </div>
-  );
-}
-
-function ScoreBadge({ label, value }: { label: string; value: number }) {
-  const getColor = (v: number) => {
-    if (v >= 8) return 'text-red-400';
-    if (v >= 6) return 'text-yellow-400';
-    return 'text-green-400';
-  };
-
-  return (
-    <div className="text-center p-2 rounded-lg bg-secondary/30">
-      <p className="text-xs text-muted-foreground mb-1">{label}</p>
-      <p className={`text-lg font-bold ${getColor(value)}`}>{value.toFixed(1)}</p>
-    </div>
-  );
-}
-
-// Simple Radar Chart Component
-function PainRadar({ pains }: { pains: PainArchetype[] }) {
-  if (pains.length === 0) {
-    return (
-      <div className="text-muted-foreground text-center">
-        <BarChart3 className="w-16 h-16 mx-auto mb-4 opacity-50" />
-        <p>No data available yet</p>
-      </div>
-    );
-  }
-
-  const maxValue = 10;
-  const centerX = 150;
-  const centerY = 150;
-  const radius = 100;
-  const axes = ['Severity', 'Frequency', 'Urgency', 'Competition'];
-
-  const getPoint = (value: number, index: number) => {
-    const angle = (Math.PI * 2 * index) / axes.length - Math.PI / 2;
-    const r = (value / maxValue) * radius;
-    return {
-      x: centerX + r * Math.cos(angle),
-      y: centerY + r * Math.sin(angle),
-    };
-  };
-
-  return (
-    <svg width="300" height="300" className="mx-auto">
-      {/* Background grid */}
-      {[2, 4, 6, 8, 10].map((level) => (
-        <polygon
-          key={level}
-          points={axes.map((_, i) => {
-            const point = getPoint(level, i);
-            return `${point.x},${point.y}`;
-          }).join(' ')}
-          fill="none"
-          stroke="rgba(200, 230, 0, 0.1)"
-          strokeWidth="1"
-        />
-      ))}
-
-      {/* Axes */}
-      {axes.map((axis, i) => {
-        const end = getPoint(maxValue, i);
-        return (
-          <line
-            key={axis}
-            x1={centerX}
-            y1={centerY}
-            x2={end.x}
-            y2={end.y}
-            stroke="rgba(200, 230, 0, 0.2)"
-            strokeWidth="1"
-          />
-        );
-      })}
-
-      {/* Axis labels */}
-      {axes.map((axis, i) => {
-        const pos = getPoint(maxValue + 1.5, i);
-        return (
-          <text
-            key={`label-${axis}`}
-            x={pos.x}
-            y={pos.y}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            className="fill-muted-foreground text-xs"
-          >
-            {axis}
-          </text>
-        );
-      })}
-
-      {/* Data polygons for each pain */}
-      {pains.slice(0, 3).map((pain, painIndex) => {
-        const values = [pain.severity, pain.frequency, pain.urgency, pain.competitiveSaturation];
-        const points = values.map((v, i) => getPoint(v, i));
-        const opacity = 0.3 - painIndex * 0.1;
-        
-        return (
-          <g key={pain.id}>
-            <polygon
-              points={points.map(p => `${p.x},${p.y}`).join(' ')}
-              fill={`rgba(200, 230, 0, ${opacity})`}
-              stroke="#C8E600"
-              strokeWidth="2"
-            />
-            {points.map((p, i) => (
-              <circle
-                key={i}
-                cx={p.x}
-                cy={p.y}
-                r="4"
-                fill="#C8E600"
-              />
-            ))}
-          </g>
-        );
-      })}
-    </svg>
   );
 }

@@ -40,6 +40,8 @@ interface BriefingStore {
   setResearchWebhookPromise: (p: Promise<unknown> | null) => void;
   /** Set researchResult and extract dashboardMetrics + recentDiscoveries from webhook payload */
   setWebhookPayload: (data: unknown) => void;
+  /** Hydrate report history from Supabase (e.g. on load after refresh) */
+  setReportHistory: (entries: ReportHistory[]) => void;
   reset: () => void;
 }
 
@@ -127,6 +129,7 @@ export const useBriefingStore = create<BriefingStore>()((set) => ({
       reportHistory: [reportEntry, ...state.reportHistory],
     }));
   },
+  setReportHistory: (entries) => set({ reportHistory: entries }),
   reset: () =>
     set({
       messages: [],
