@@ -92,31 +92,34 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
     type ProfileRow = { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null;
 
-    const fetchProfileWithRetry = (userId: string): Promise<ProfileRow> => {
-      const run = () =>
-        supabase.from('profiles').select(PROFILE_SELECT).eq('id', userId).single().then((r) => r.data as ProfileRow);
-      return run().then(
-        (data) => data ?? null,
-        () =>
-          // Retry once on abort/failure so we get role (admin) when first request is aborted
-          new Promise<ProfileRow>((resolve) => {
-            setTimeout(() => run().then((d) => resolve(d ?? null), () => resolve(null)), 300);
-          })
-      );
+    const fetchProfileWithRetry = async (userId: string): Promise<ProfileRow> => {
+      const run = async (): Promise<ProfileRow> => {
+        const res = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', userId).single();
+        return (res.data as ProfileRow) ?? null;
+      };
+      try {
+        return await run();
+      } catch {
+        // Retry once on abort/failure so we get role (admin) when first request is aborted
+        await new Promise((r) => setTimeout(r, 300));
+        try {
+          return await run();
+        } catch {
+          return null;
+        }
+      }
     };
 
-    const applySession = (session: { user: SupabaseUser } | null): Promise<void> => {
-      if (!session?.user) return Promise.resolve();
-      const mappedNoProfile = () => mapSupabaseUser(session.user);
-      return fetchProfileWithRetry(session.user.id).then((data) => {
-        const mapped = mapSupabaseUser(session.user, data);
-        if (mapped.isLocked) {
-          void supabase.auth.signOut();
-          set({ user: null, isAuthenticated: false });
-        } else {
-          set({ user: mapped, isAuthenticated: true });
-        }
-      });
+    const applySession = async (session: { user: SupabaseUser } | null): Promise<void> => {
+      if (!session?.user) return;
+      const data = await fetchProfileWithRetry(session.user.id);
+      const mapped = mapSupabaseUser(session.user, data);
+      if (mapped.isLocked) {
+        void supabase.auth.signOut();
+        set({ user: null, isAuthenticated: false });
+      } else {
+        set({ user: mapped, isAuthenticated: true });
+      }
     };
 
     const markInitialized = () => set({ isInitialized: true });
