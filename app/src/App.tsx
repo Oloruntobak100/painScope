@@ -53,6 +53,14 @@ function App() {
     }
   }, [isAuthenticated, currentRoute]);
 
+  // Redirect non-admin users from settings
+  useEffect(() => {
+    if (currentRoute === 'settings' && isAuthenticated && user?.role !== 'admin') {
+      setCurrentRoute('dashboard');
+      window.location.hash = 'dashboard';
+    }
+  }, [currentRoute, isAuthenticated, user?.role]);
+
   // Redirect authenticated users from landing to app only when URL has a hash
   // (and never on local dev so we always see the homepage at localhost/127.0.0.1)
   useEffect(() => {

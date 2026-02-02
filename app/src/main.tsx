@@ -5,7 +5,7 @@ import App from './App.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useAuthStore } from './store/authStore'
 
-// Initialize auth (uses local storage on localhost, Supabase in production)
+// Initialize auth (Supabase)
 useAuthStore.getState().initAuth()
 
 createRoot(document.getElementById('root')!).render(

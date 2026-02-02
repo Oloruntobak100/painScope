@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import {
   Settings as SettingsIcon,
   User,
+  Users,
   Bell,
   Shield,
   Database,
@@ -13,6 +14,11 @@ import {
   AlertTriangle,
   Save,
   Loader2,
+  MoreHorizontal,
+  Pencil,
+  Lock,
+  Unlock,
+  KeyRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,7 +27,34 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useAuthStore } from '@/store/authStore';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { useAuthStore, type UserRole } from '@/store/authStore';
 import { useSettingsStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
@@ -30,8 +63,18 @@ interface SettingsProps {
   currentRoute: string;
 }
 
+type AdminUserRow = {
+  id: string;
+  email: string;
+  name: string;
+  company?: string;
+  industry?: string;
+  role: UserRole;
+  is_locked: boolean;
+};
+
 export default function Settings({ onNavigate }: SettingsProps) {
-  const { user, updateUser } = useAuthStore();
+  const { user, updateUser, listUsersForAdmin, updateUserProfileAsAdmin, requestPasswordReset } = useAuthStore();
   const { settings, updateSettings } = useSettingsStore();
   const [activeTab, setActiveTab] = useState('profile');
   const [isSaving, setIsSaving] = useState(false);
@@ -44,9 +87,36 @@ export default function Settings({ onNavigate }: SettingsProps) {
     industry: user?.industry || '',
   });
 
+  // Admin users tab
+  const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [editUser, setEditUser] = useState<AdminUserRow | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', company: '', industry: '' });
+  const [userActionMessage, setUserActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   useEffect(() => {
     setProfileForm({ name: user?.name || '', email: user?.email || '', company: user?.company || '', industry: user?.industry || '' });
   }, [user]);
+
+  useEffect(() => {
+    if (activeTab === 'users' && user?.role === 'admin') {
+      setUsersLoading(true);
+      listUsersForAdmin().then((list) => {
+        setAdminUsers(list);
+        setUsersLoading(false);
+      });
+    }
+  }, [activeTab, user?.role]);
+
+  useEffect(() => {
+    if (editUser) {
+      setEditForm({
+        name: editUser.name,
+        company: editUser.company ?? '',
+        industry: editUser.industry ?? '',
+      });
+    }
+  }, [editUser]);
 
   useEffect(() => {
     if (!isSupabaseConfigured() || !user) return;
@@ -147,6 +217,12 @@ export default function Settings({ onNavigate }: SettingsProps) {
                 <Shield className="w-4 h-4" />
                 Security
               </TabsTrigger>
+              {user?.role === 'admin' && (
+                <TabsTrigger value="users" className="gap-2">
+                  <Users className="w-4 h-4" />
+                  Users
+                </TabsTrigger>
+              )}
             </TabsList>
 
             {/* Profile Tab */}
@@ -481,6 +557,216 @@ export default function Settings({ onNavigate }: SettingsProps) {
                 </div>
               </motion.div>
             </TabsContent>
+
+            {/* Users Tab (Admin only) */}
+            {user?.role === 'admin' && (
+              <TabsContent value="users" className="space-y-6">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="glass rounded-xl p-6"
+                >
+                  <h2 className="text-lg font-semibold mb-4">User Management</h2>
+                  {userActionMessage && (
+                    <div
+                      className={`mb-4 px-4 py-2 rounded-lg text-sm ${userActionMessage.type === 'success' ? 'bg-lime/20 text-lime' : 'bg-red-500/20 text-red-400'}`}
+                    >
+                      {userActionMessage.text}
+                    </div>
+                  )}
+                  {usersLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-8 h-8 animate-spin text-lime" />
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Email</TableHead>
+                            <TableHead>Role</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="w-[80px]">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {adminUsers.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                                No users found.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            adminUsers.map((row) => (
+                            <TableRow key={row.id}>
+                              <TableCell className="font-medium">{row.name}</TableCell>
+                              <TableCell>{row.email}</TableCell>
+                              <TableCell>
+                                <Select
+                                  value={row.role}
+                                  onValueChange={async (value: UserRole) => {
+                                    const res = await updateUserProfileAsAdmin(row.id, { role: value });
+                                    if (res.success) {
+                                      setAdminUsers((prev) => prev.map((u) => (u.id === row.id ? { ...u, role: value } : u)));
+                                      setUserActionMessage({ type: 'success', text: 'Role updated' });
+                                      setTimeout(() => setUserActionMessage(null), 3000);
+                                    } else {
+                                      setUserActionMessage({ type: 'error', text: res.error ?? 'Failed' });
+                                    }
+                                  }}
+                                >
+                                  <SelectTrigger className="w-[100px] h-8">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="user">User</SelectItem>
+                                    <SelectItem value="admin">Admin</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </TableCell>
+                              <TableCell>
+                                <span className={row.is_locked ? 'text-red-400' : 'text-lime'}>
+                                  {row.is_locked ? 'Locked' : 'Active'}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                                      <MoreHorizontal className="w-4 h-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem onClick={() => setEditUser(row)}>
+                                      <Pencil className="w-4 h-4 mr-2" />
+                                      Edit user
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={async () => {
+                                        const res = await updateUserProfileAsAdmin(row.id, { is_locked: !row.is_locked });
+                                        if (res.success) {
+                                          setAdminUsers((prev) => prev.map((u) => (u.id === row.id ? { ...u, is_locked: !u.is_locked } : u)));
+                                          setUserActionMessage({ type: 'success', text: row.is_locked ? 'Account unlocked' : 'Account locked' });
+                                          setTimeout(() => setUserActionMessage(null), 3000);
+                                        } else {
+                                          setUserActionMessage({ type: 'error', text: res.error ?? 'Failed' });
+                                        }
+                                      }}
+                                    >
+                                      {row.is_locked ? (
+                                        <>
+                                          <Unlock className="w-4 h-4 mr-2" />
+                                          Unlock account
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Lock className="w-4 h-4 mr-2" />
+                                          Lock account
+                                        </>
+                                      )}
+                                    </DropdownMenuItem>
+                                    {isSupabaseConfigured() && (
+                                      <DropdownMenuItem
+                                        onClick={async () => {
+                                          const res = await requestPasswordReset(row.email);
+                                          setUserActionMessage({
+                                            type: res.success ? 'success' : 'error',
+                                            text: res.success ? 'Password reset email sent' : (res.error ?? 'Failed'),
+                                          });
+                                          setTimeout(() => setUserActionMessage(null), 4000);
+                                        }}
+                                      >
+                                        <KeyRound className="w-4 h-4 mr-2" />
+                                        Send password reset
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </TableCell>
+                            </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </motion.div>
+              </TabsContent>
+            )}
+
+            {/* Edit User Dialog */}
+            <Dialog open={!!editUser} onOpenChange={(open) => !open && setEditUser(null)}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit user</DialogTitle>
+                </DialogHeader>
+                {editUser && (
+                  <div className="grid gap-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-name">Name</Label>
+                      <Input
+                        id="edit-name"
+                        value={editForm.name}
+                        onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Email</Label>
+                      <Input value={editUser.email} disabled className="opacity-70" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-company">Company</Label>
+                      <Input
+                        id="edit-company"
+                        value={editForm.company}
+                        onChange={(e) => setEditForm((f) => ({ ...f, company: e.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-industry">Industry</Label>
+                      <Input
+                        id="edit-industry"
+                        value={editForm.industry}
+                        onChange={(e) => setEditForm((f) => ({ ...f, industry: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2 pt-4">
+                      <Button variant="outline" onClick={() => setEditUser(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        className="bg-lime text-background hover:bg-lime-light"
+                        onClick={async () => {
+                          if (!editUser) return;
+                          const res = await updateUserProfileAsAdmin(editUser.id, {
+                            name: editForm.name,
+                            company: editForm.company || undefined,
+                            industry: editForm.industry || undefined,
+                          });
+                          if (res.success) {
+                            setAdminUsers((prev) =>
+                              prev.map((u) =>
+                                u.id === editUser.id
+                                  ? { ...u, name: editForm.name, company: editForm.company, industry: editForm.industry }
+                                  : u
+                              )
+                            );
+                            setEditUser(null);
+                            setUserActionMessage({ type: 'success', text: 'User updated' });
+                            setTimeout(() => setUserActionMessage(null), 3000);
+                          } else {
+                            setUserActionMessage({ type: 'error', text: res.error ?? 'Failed' });
+                          }
+                        }}
+                      >
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </Tabs>
         </div>
       </div>

@@ -31,7 +31,7 @@ interface DashboardProps {
   currentRoute: string;
 }
 
-const navItems = [
+const navItemsBase = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'briefing', label: 'AI Briefing', icon: Sparkles },
   { id: 'scout', label: 'Scout Lab', icon: Terminal },
@@ -174,7 +174,7 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
 
           {/* Navigation */}
           <nav className="flex-1 py-4 px-3 space-y-1">
-            {navItems.map((item) => {
+            {navItemsBase.filter((item) => item.id !== 'settings' || user?.role === 'admin').map((item) => {
               const isActive = currentRoute === item.id;
               return (
                 <button
@@ -353,16 +353,18 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
                       <p className="text-sm text-muted-foreground">{user?.email || 'user@example.com'}</p>
                     </div>
                     <div className="p-2">
-                      <button
-                        onClick={() => {
-                          setProfileOpen(false);
-                          onNavigate('settings');
-                        }}
-                        className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-sm"
-                      >
-                        <Settings className="w-4 h-4" />
-                        Settings
-                      </button>
+                      {user?.role === 'admin' && (
+                        <button
+                          onClick={() => {
+                            setProfileOpen(false);
+                            onNavigate('settings');
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-sm"
+                        >
+                          <Settings className="w-4 h-4" />
+                          Settings
+                        </button>
+                      )}
                       <button
                         onClick={handleLogout}
                         className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-sm text-red-400"

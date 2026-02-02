@@ -1,14 +1,8 @@
 import { create } from 'zustand';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
-import {
-  isLocalAuthEnabled,
-  localRegister,
-  localLogin,
-  localLogout,
-  localGetCurrentUser,
-  localUpdateUser,
-} from '@/lib/localAuth';
+
+export type UserRole = 'user' | 'admin';
 
 export interface User {
   id: string;
@@ -18,6 +12,8 @@ export interface User {
   company?: string;
   industry?: string;
   isVerified: boolean;
+  role?: UserRole;
+  isLocked?: boolean;
   subscription?: {
     plan: 'free' | 'pro' | 'enterprise';
     status: 'active' | 'trialing' | 'canceled';
@@ -47,17 +43,29 @@ interface AuthStore extends AuthState {
   resetPassword: (newPassword: string) => Promise<{ success: boolean; error?: string }>;
   initAuth: () => void;
   setPasswordRecovery: (value: boolean) => void;
+  /** Admin only: update another user's profile (role, is_locked, name, company, industry) */
+  updateUserProfileAsAdmin: (userId: string, updates: { name?: string; company?: string; industry?: string; role?: UserRole; is_locked?: boolean }) => Promise<{ success: boolean; error?: string }>;
+  /** Admin only: list all users (from Supabase profiles, RLS allows admins to select all) */
+  listUsersForAdmin: () => Promise<Array<{ id: string; email: string; name: string; company?: string; industry?: string; role: UserRole; is_locked: boolean }>>;
 }
 
-function mapSupabaseUser(sbUser: SupabaseUser, profile?: { name?: string; company?: string; industry?: string; avatar?: string } | null): User {
+const PROFILE_SELECT = 'name, company, industry, avatar, role, email, is_locked';
+
+function mapSupabaseUser(
+  sbUser: SupabaseUser,
+  profile?: { name?: string; company?: string; industry?: string; avatar?: string; role?: string; is_locked?: boolean; email?: string } | null
+): User {
+  const role = (profile?.role === 'admin' ? 'admin' : 'user') as User['role'];
   return {
     id: sbUser.id,
-    email: sbUser.email ?? '',
+    email: profile?.email ?? sbUser.email ?? '',
     name: profile?.name ?? sbUser.user_metadata?.full_name ?? sbUser.user_metadata?.name ?? 'User',
     avatar: profile?.avatar ?? sbUser.user_metadata?.avatar_url,
     company: profile?.company,
     industry: profile?.industry,
     isVerified: sbUser.email_confirmed_at != null,
+    role,
+    isLocked: profile?.is_locked === true,
     subscription: { plan: 'free', status: 'active' },
     createdAt: new Date(sbUser.created_at ?? Date.now()),
   };
@@ -73,57 +81,35 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   setPasswordRecovery: (value) => set({ isPasswordRecovery: value }),
 
   initAuth: () => {
-    // Use local auth on localhost
-    if (isLocalAuthEnabled()) {
-      const localUser = localGetCurrentUser();
-      if (localUser) {
-        set({
-          user: {
-            id: localUser.id,
-            email: localUser.email,
-            name: localUser.name,
-            avatar: localUser.avatar,
-            company: localUser.company,
-            industry: localUser.industry,
-            isVerified: localUser.isVerified,
-            subscription: { plan: 'free', status: 'active' },
-            createdAt: new Date(localUser.createdAt),
-          },
-          isAuthenticated: true,
-        });
-      }
-      return;
-    }
-
-    // Use Supabase in production
     if (!isSupabaseConfigured()) return;
 
-    void Promise.resolve(supabase.auth.getSession()).then(
-      ({ data: { session } }) => {
-        if (session?.user) {
-          void Promise.resolve(
-            supabase
-              .from('profiles')
-              .select('name, company, industry, avatar')
-              .eq('id', session.user.id)
-              .single()
-          )
-            .then(({ data }) => {
-              set({
-                user: mapSupabaseUser(session.user, data),
-                isAuthenticated: true,
-              });
-            })
-            .catch(() => {
-              set({
-                user: mapSupabaseUser(session.user),
-                isAuthenticated: true,
-              });
-            });
-        }
-      },
-      () => {}
-    );
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        void supabase
+          .from('profiles')
+          .select(PROFILE_SELECT)
+          .eq('id', session.user.id)
+          .single()
+          .then(async ({ data }) => {
+            const mapped = mapSupabaseUser(session.user, data);
+            if (mapped.isLocked) {
+              await supabase.auth.signOut();
+              set({ user: null, isAuthenticated: false });
+              return;
+            }
+            set({ user: mapped, isAuthenticated: true });
+          })
+          .catch(async () => {
+            const mapped = mapSupabaseUser(session.user);
+            if (mapped.isLocked) {
+              await supabase.auth.signOut();
+              set({ user: null, isAuthenticated: false });
+              return;
+            }
+            set({ user: mapped, isAuthenticated: true });
+          });
+      }
+    });
 
     supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
@@ -135,9 +121,15 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         return;
       }
       if (session?.user) {
-        const { data } = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', session.user.id).single();
+        const { data } = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', session.user.id).single();
+        const mapped = mapSupabaseUser(session.user, data);
+        if (mapped.isLocked) {
+          await supabase.auth.signOut();
+          set({ user: null, isAuthenticated: false });
+          return;
+        }
         set({
-          user: mapSupabaseUser(session.user, data),
+          user: mapped,
           isAuthenticated: true,
           pendingVerification: null,
           isPasswordRecovery: false,
@@ -147,35 +139,8 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   register: async (email, password, name) => {
-    // Use local auth on localhost - skip verification for dev
-    if (isLocalAuthEnabled()) {
-      set({ isLoading: true });
-      const result = localRegister(email, password, name);
-      set({ isLoading: false });
-      
-      if (result.success && result.user) {
-        set({
-          user: {
-            id: result.user.id,
-            email: result.user.email,
-            name: result.user.name,
-            avatar: result.user.avatar,
-            company: result.user.company,
-            industry: result.user.industry,
-            isVerified: result.user.isVerified,
-            subscription: { plan: 'free', status: 'active' },
-            createdAt: new Date(result.user.createdAt),
-          },
-          isAuthenticated: true,
-          pendingVerification: null, // No verification needed for local dev
-        });
-      }
-      return result;
-    }
-
-    // Use Supabase in production
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     const { data, error } = await supabase.auth.signUp({
@@ -193,7 +158,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       return { success: true };
     }
     if (data?.user) {
-      const { data: profile } = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
+      const { data: profile } = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', data.user.id).single();
       set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true });
       return { success: true };
     }
@@ -201,25 +166,8 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   verifyEmail: async (code) => {
-    // Use hardcoded verification for local dev
-    if (isLocalAuthEnabled()) {
-      const HARDCODED_CODE = '12345'; // Constant code for development
-      
-      if (code !== HARDCODED_CODE) {
-        return { success: false, error: 'Invalid verification code. Use: 12345' };
-      }
-      
-      // Mark as verified (though local auth auto-verifies anyway)
-      const { pendingVerification } = get();
-      if (pendingVerification) {
-        set({ pendingVerification: null, isAuthenticated: true });
-      }
-      return { success: true };
-    }
-
-    // Use Supabase in production
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     const { pendingVerification } = get();
     if (!pendingVerification) {
@@ -228,7 +176,6 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
     set({ isLoading: true });
     try {
       const token = String(code).trim();
-      // Try 'email' first (standard OTP); some Confirm signup flows use 'signup'
       let result = await supabase.auth.verifyOtp({
         email: pendingVerification,
         token,
@@ -245,7 +192,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       const { data, error } = result;
       if (error) return { success: false, error: error.message };
       if (data?.user) {
-        const { data: profile } = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
+        const { data: profile } = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', data.user.id).single();
         set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true, pendingVerification: null });
         return { success: true };
       }
@@ -259,14 +206,8 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   resendVerification: async (email) => {
-    // For local dev, just return success (no actual email sent)
-    if (isLocalAuthEnabled()) {
-      return { success: true };
-    }
-
-    // Use Supabase in production
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     const { error } = await supabase.auth.resend({
@@ -279,34 +220,8 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   login: async (email, password) => {
-    // Use local auth on localhost
-    if (isLocalAuthEnabled()) {
-      set({ isLoading: true });
-      const result = localLogin(email, password);
-      set({ isLoading: false });
-      
-      if (result.success && result.user) {
-        set({
-          user: {
-            id: result.user.id,
-            email: result.user.email,
-            name: result.user.name,
-            avatar: result.user.avatar,
-            company: result.user.company,
-            industry: result.user.industry,
-            isVerified: result.user.isVerified,
-            subscription: { plan: 'free', status: 'active' },
-            createdAt: new Date(result.user.createdAt),
-          },
-          isAuthenticated: true,
-        });
-      }
-      return result;
-    }
-
-    // Use Supabase in production
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     try {
@@ -319,14 +234,19 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         return { success: false, error: error.message };
       }
       if (data?.user) {
-        let profile: { name?: string; company?: string; industry?: string; avatar?: string } | null = null;
+        let profile: { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null = null;
         try {
-          const res = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
+          const res = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', data.user.id).single();
           profile = res.data;
         } catch {
           // Profile fetch is best-effort; use auth user only
         }
-        set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true });
+        const mapped = mapSupabaseUser(data.user, profile);
+        if (mapped.isLocked) {
+          await supabase.auth.signOut();
+          return { success: false, error: 'Account is locked. Contact an administrator.' };
+        }
+        set({ user: mapped, isAuthenticated: true });
         return { success: true };
       }
       return { success: false, error: 'Login failed' };
@@ -340,7 +260,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
   loginWithOtp: async (email) => {
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     const { error } = await supabase.auth.signInWithOtp({
@@ -356,7 +276,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
   loginWithGoogle: async () => {
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     const { error } = await supabase.auth.signInWithOAuth({
@@ -371,14 +291,6 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   },
 
   logout: async () => {
-    // Use local auth on localhost
-    if (isLocalAuthEnabled()) {
-      localLogout();
-      set({ user: null, isAuthenticated: false, pendingVerification: null });
-      return;
-    }
-
-    // Use Supabase in production
     if (isSupabaseConfigured()) {
       await supabase.auth.signOut();
     }
@@ -388,15 +300,6 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   updateUser: async (updates) => {
     const { user } = get();
     if (!user) return;
-
-    // Use local auth on localhost
-    if (isLocalAuthEnabled()) {
-      localUpdateUser(user.id, updates);
-      set((s) => ({ user: s.user ? { ...s.user, ...updates } : null }));
-      return;
-    }
-
-    // Use Supabase in production
     if (!isSupabaseConfigured()) {
       set((s) => ({ user: s.user ? { ...s.user, ...updates } : null }));
       return;
@@ -416,7 +319,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
   requestPasswordReset: async (email) => {
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -429,12 +332,39 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
   resetPassword: async (newPassword: string) => {
     if (!isSupabaseConfigured()) {
-      return { success: false, error: 'Supabase is not configured' };
+      return { success: false, error: 'Authentication is not configured' };
     }
     set({ isLoading: true });
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     set({ isLoading: false });
     if (error) return { success: false, error: error.message };
     return { success: true };
+  },
+
+  updateUserProfileAsAdmin: async (userId, updates) => {
+    if (!isSupabaseConfigured()) return { success: false, error: 'Authentication is not configured' };
+    const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (updates.name !== undefined) payload.name = updates.name;
+    if (updates.company !== undefined) payload.company = updates.company;
+    if (updates.industry !== undefined) payload.industry = updates.industry;
+    if (updates.role !== undefined) payload.role = updates.role;
+    if (updates.is_locked !== undefined) payload.is_locked = updates.is_locked;
+    const { error } = await supabase.from('profiles').update(payload).eq('id', userId);
+    return error ? { success: false, error: error.message } : { success: true };
+  },
+
+  listUsersForAdmin: async () => {
+    if (!isSupabaseConfigured()) return [];
+    const { data, error } = await supabase.from('profiles').select('id, email, name, company, industry, role, is_locked');
+    if (error) return [];
+    return (data ?? []).map((r) => ({
+      id: r.id,
+      email: (r.email as string) ?? '',
+      name: (r.name as string) ?? '',
+      company: r.company as string | undefined,
+      industry: r.industry as string | undefined,
+      role: (r.role === 'admin' ? 'admin' : 'user') as UserRole,
+      is_locked: Boolean(r.is_locked),
+    }));
   },
 }));
