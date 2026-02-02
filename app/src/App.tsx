@@ -109,6 +109,8 @@ function App() {
     const currentUser = useAuthStore.getState().user;
     const targetRoute = currentUser?.industry ? 'dashboard' : 'briefing';
     setCurrentRoute(targetRoute);
+    window.location.hash = targetRoute;
+    window.scrollTo(0, 0);
   };
 
   const handleSubscribe = (plan: string) => {

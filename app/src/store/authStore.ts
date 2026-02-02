@@ -236,7 +236,13 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
     }
     set({ isLoading: true });
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const signInPromise = supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await Promise.race([
+        signInPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Connection timed out. Please try again.')), 15000)
+        ),
+      ]);
       if (error) {
         if (error.message.includes('Email not confirmed')) {
           set({ pendingVerification: email });
@@ -247,10 +253,14 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       if (data?.user) {
         let profile: { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null = null;
         try {
-          const res = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', data.user.id).single();
-          profile = res.data;
+          const profilePromise = supabase.from('profiles').select(PROFILE_SELECT).eq('id', data.user.id).single();
+          const res = await Promise.race([
+            profilePromise,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('profile_timeout')), 8000)),
+          ]);
+          profile = res?.data ?? null;
         } catch {
-          // Profile fetch is best-effort; use auth user only
+          // Profile fetch failed or timed out; use auth user only so login still completes
         }
         const mapped = mapSupabaseUser(data.user, profile);
         if (mapped.isLocked) {
