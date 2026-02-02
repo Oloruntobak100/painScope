@@ -234,8 +234,8 @@ export default function PainLibrary({ onNavigate }: PainLibraryProps) {
 
   // Open full report when URL has report=full (e.g. from Dashboard "View full report")
   useEffect(() => {
-    const hashQuery = window.location.hash.split('?')[1] || '';
-    const reportParam = new URLSearchParams(hashQuery).get('report');
+    const queryString = window.location.search || (window.location.hash.includes('?') ? '?' + window.location.hash.split('?')[1] : '');
+    const reportParam = new URLSearchParams(queryString).get('report');
     if (reportParam === 'full' && reportHistory.length > 0 && reportHistory[0].comprehensiveReport) {
       setFullReportContent(reportHistory[0].comprehensiveReport);
       setFullReportOpen(true);

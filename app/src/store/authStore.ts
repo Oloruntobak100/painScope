@@ -92,21 +92,23 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
     type ProfileRow = { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null;
 
+    const PROFILE_SELECT_MINIMAL = 'name, company, industry, avatar, role';
     const fetchProfileWithRetry = async (userId: string): Promise<ProfileRow> => {
-      const run = async (): Promise<ProfileRow> => {
-        const res = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', userId).single();
+      const run = async (select: string): Promise<ProfileRow> => {
+        const res = await supabase.from('profiles').select(select).eq('id', userId).single();
         return (res.data as ProfileRow) ?? null;
       };
       try {
-        return await run();
+        const data = await run(PROFILE_SELECT);
+        if (data != null) return data;
       } catch {
-        // Retry once on abort/failure so we get role (admin) when first request is aborted
-        await new Promise((r) => setTimeout(r, 300));
-        try {
-          return await run();
-        } catch {
-          return null;
-        }
+        // Full select may fail if email/is_locked columns missing; retry with minimal so role (admin) loads
+      }
+      try {
+        await new Promise((r) => setTimeout(r, 200));
+        return await run(PROFILE_SELECT_MINIMAL);
+      } catch {
+        return null;
       }
     };
 
@@ -124,7 +126,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
 
     const markInitialized = () => set({ isInitialized: true });
 
-    // Use INITIAL_SESSION as source of truth so we don't depend on getSession() (which can abort)
+    // INITIAL_SESSION: Supabase restores session from storage and emits this once
     supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'INITIAL_SESSION') {
         void applySession(session).then(markInitialized);
@@ -156,7 +158,13 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       }
     });
 
-    // Safety: if INITIAL_SESSION never fires (e.g. old client), mark initialized after 4s
+    // Fallback: getSession() in case INITIAL_SESSION is delayed or doesn't fire (e.g. some clients)
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (get().isInitialized) return;
+      void applySession(session).then(markInitialized);
+    });
+
+    // Safety: if neither INITIAL_SESSION nor getSession() sets state in time, mark initialized after 4s
     setTimeout(() => {
       if (!get().isInitialized) markInitialized();
     }, 4000);

@@ -20,11 +20,27 @@ type AppRoute = PublicRoute | 'dashboard' | 'briefing' | 'scout' | 'library' | '
 
 const PROTECTED_ROUTES: AppRoute[] = ['dashboard', 'briefing', 'scout', 'library', 'settings'];
 
+const VALID_ROUTES: AppRoute[] = ['landing', 'how-it-works', 'pricing', 'contact', 'privacy', 'terms', 'dashboard', 'briefing', 'scout', 'library', 'settings'];
+
 function getInitialRoute(): AppRoute {
-  const raw = window.location.hash.slice(1) || 'landing';
-  const path = raw.split('?')[0];
-  const valid: AppRoute[] = ['landing', 'how-it-works', 'pricing', 'contact', 'privacy', 'terms', 'dashboard', 'briefing', 'scout', 'library', 'settings'];
-  return valid.includes(path as AppRoute) ? (path as AppRoute) : 'landing';
+  const pathname = window.location.pathname.replace(/^\/+/, '') || 'landing';
+  const path = pathname.split('/')[0].split('?')[0] || 'landing';
+  return VALID_ROUTES.includes(path as AppRoute) ? (path as AppRoute) : 'landing';
+}
+
+function getPathForRoute(route: AppRoute, queryParams?: Record<string, string>) {
+  const query = queryParams && Object.keys(queryParams).length > 0
+    ? '?' + new URLSearchParams(queryParams).toString()
+    : '';
+  return route === 'landing' ? '/' : `/${route}${query}`;
+}
+
+function setRouteUrl(route: AppRoute, queryParams?: Record<string, string>) {
+  window.history.replaceState({}, '', getPathForRoute(route, queryParams));
+}
+
+function pushRouteUrl(route: AppRoute, queryParams?: Record<string, string>) {
+  window.history.pushState({}, '', getPathForRoute(route, queryParams));
 }
 
 function App() {
@@ -34,9 +50,9 @@ function App() {
   const { isAuthenticated, user, isPasswordRecovery, isInitialized } = useAuthStore();
 
   useEffect(() => {
-    const onHashChange = () => setCurrentRoute(getInitialRoute());
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    const onPopState = () => setCurrentRoute(getInitialRoute());
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   // Sync auth modal when password recovery
@@ -50,6 +66,7 @@ function App() {
   useEffect(() => {
     if (isInitialized && !isAuthenticated && PROTECTED_ROUTES.includes(currentRoute)) {
       setCurrentRoute('landing');
+      setRouteUrl('landing');
     }
   }, [isInitialized, isAuthenticated, currentRoute]);
 
@@ -57,21 +74,19 @@ function App() {
   useEffect(() => {
     if (currentRoute === 'settings' && isAuthenticated && user?.role !== 'admin') {
       setCurrentRoute('dashboard');
-      window.location.hash = 'dashboard';
+      setRouteUrl('dashboard');
     }
   }, [currentRoute, isAuthenticated, user?.role]);
 
-  // Redirect authenticated users from landing to app only when URL has a hash
-  // (and never on local dev so we always see the homepage at localhost/127.0.0.1)
+  // Redirect authenticated users from / (landing) to dashboard or briefing
   useEffect(() => {
     const isLocalDev =
       window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     if (isLocalDev) return;
-    const hash = window.location.hash.slice(1);
-    if (isAuthenticated && currentRoute === 'landing' && hash) {
+    if (isAuthenticated && currentRoute === 'landing') {
       const targetRoute = user?.industry ? 'dashboard' : 'briefing';
       setCurrentRoute(targetRoute);
-      window.location.hash = targetRoute;
+      setRouteUrl(targetRoute);
     }
   }, [isAuthenticated, currentRoute, user?.industry]);
 
@@ -83,10 +98,7 @@ function App() {
       return;
     }
     setCurrentRoute(r);
-    const query = queryParams && Object.keys(queryParams).length > 0
-      ? '?' + new URLSearchParams(queryParams).toString()
-      : '';
-    window.location.hash = r === 'landing' ? '' : r + query;
+    pushRouteUrl(r, queryParams);
     window.scrollTo(0, 0);
   };
 
@@ -109,7 +121,7 @@ function App() {
     const currentUser = useAuthStore.getState().user;
     const targetRoute = currentUser?.industry ? 'dashboard' : 'briefing';
     setCurrentRoute(targetRoute);
-    window.location.hash = targetRoute;
+    pushRouteUrl(targetRoute);
     window.scrollTo(0, 0);
   };
 
