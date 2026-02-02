@@ -111,4 +111,4 @@ CREATE POLICY "Admins can update all profiles"
   );
 
 -- 6. Grant an admin (run once; replace with your user id or uncomment next line)
--- UPDATE public.profiles SET role = 'admin' WHERE id = '684d52fb-e56d-4298-ae3d-fec7a9314e04';
+UPDATE public.profiles SET role = 'admin' WHERE id = '684d52fb-e56d-4298-ae3d-fec7a9314e04';

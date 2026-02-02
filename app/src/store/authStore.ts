@@ -26,7 +26,7 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  /** False until getSession() has completed once (so we don't redirect before restoring session on refresh) */
+  /** False until INITIAL_SESSION has been processed (so we don't redirect before restoring session on refresh) */
   isInitialized: boolean;
   pendingVerification: string | null;
   isPasswordRecovery: boolean;
@@ -90,47 +90,43 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       return;
     }
 
+    type ProfileRow = { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null;
+
+    const fetchProfileWithRetry = (userId: string): Promise<ProfileRow> => {
+      const run = () =>
+        supabase.from('profiles').select(PROFILE_SELECT).eq('id', userId).single().then((r) => r.data as ProfileRow);
+      return run().then(
+        (data) => data ?? null,
+        () =>
+          // Retry once on abort/failure so we get role (admin) when first request is aborted
+          new Promise<ProfileRow>((resolve) => {
+            setTimeout(() => run().then((d) => resolve(d ?? null), () => resolve(null)), 300);
+          })
+      );
+    };
+
     const applySession = (session: { user: SupabaseUser } | null): Promise<void> => {
       if (!session?.user) return Promise.resolve();
       const mappedNoProfile = () => mapSupabaseUser(session.user);
-      return new Promise((resolve) => {
-        supabase
-          .from('profiles')
-          .select(PROFILE_SELECT)
-          .eq('id', session.user.id)
-          .single()
-          .then(({ data }) => {
-            const mapped = mapSupabaseUser(session.user, data);
-            if (mapped.isLocked) {
-              void supabase.auth.signOut();
-              set({ user: null, isAuthenticated: false });
-            } else {
-              set({ user: mapped, isAuthenticated: true });
-            }
-            resolve();
-          })
-          .then(undefined, () => {
-            const mapped = mappedNoProfile();
-            if (mapped.isLocked) {
-              void supabase.auth.signOut();
-              set({ user: null, isAuthenticated: false });
-            } else {
-              set({ user: mapped, isAuthenticated: true });
-            }
-            resolve();
-          });
+      return fetchProfileWithRetry(session.user.id).then((data) => {
+        const mapped = mapSupabaseUser(session.user, data);
+        if (mapped.isLocked) {
+          void supabase.auth.signOut();
+          set({ user: null, isAuthenticated: false });
+        } else {
+          set({ user: mapped, isAuthenticated: true });
+        }
       });
     };
 
-    void supabase.auth
-      .getSession()
-      .then(({ data: { session } }) => applySession(session))
-      .then(
-        () => set({ isInitialized: true }),
-        () => set({ isInitialized: true })
-      );
+    const markInitialized = () => set({ isInitialized: true });
 
-    supabase.auth.onAuthStateChange(async (event, session) => {
+    // Use INITIAL_SESSION as source of truth so we don't depend on getSession() (which can abort)
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'INITIAL_SESSION') {
+        void applySession(session).then(markInitialized);
+        return;
+      }
       if (event === 'SIGNED_OUT') {
         set({ user: null, isAuthenticated: false, pendingVerification: null, isPasswordRecovery: false });
         return;
@@ -140,27 +136,27 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         return;
       }
       if (session?.user) {
-        let data: { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null = null;
-        try {
-          const res = await supabase.from('profiles').select(PROFILE_SELECT).eq('id', session.user.id).single();
-          data = res.data;
-        } catch {
-          // Profile fetch can abort/fail; use auth user only
-        }
-        const mapped = mapSupabaseUser(session.user, data);
-        if (mapped.isLocked) {
-          await supabase.auth.signOut();
-          set({ user: null, isAuthenticated: false });
-          return;
-        }
-        set({
-          user: mapped,
-          isAuthenticated: true,
-          pendingVerification: null,
-          isPasswordRecovery: false,
+        void fetchProfileWithRetry(session.user.id).then((data) => {
+          const mapped = mapSupabaseUser(session.user!, data);
+          if (mapped.isLocked) {
+            void supabase.auth.signOut();
+            set({ user: null, isAuthenticated: false });
+            return;
+          }
+          set({
+            user: mapped,
+            isAuthenticated: true,
+            pendingVerification: null,
+            isPasswordRecovery: false,
+          });
         });
       }
     });
+
+    // Safety: if INITIAL_SESSION never fires (e.g. old client), mark initialized after 4s
+    setTimeout(() => {
+      if (!get().isInitialized) markInitialized();
+    }, 4000);
   },
 
   register: async (email, password, name) => {
