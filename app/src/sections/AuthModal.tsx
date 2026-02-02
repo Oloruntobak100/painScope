@@ -329,8 +329,9 @@ export default function AuthModal({ isOpen, onClose, onSuccess, initialMode = 's
                       <Mail className="w-8 h-8 text-cyan" />
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      We&apos;ve sent a confirmation link and code to<br /><span className="text-cyan font-mono">{pendingVerification || signUpEmail}</span>
+                      We&apos;ve sent a 6-digit verification code to<br /><span className="text-cyan font-mono">{pendingVerification || signUpEmail}</span>
                     </p>
+                    <p className="text-xs text-muted-foreground mt-1">Enter the 6-digit code below</p>
                   </div>
                   <div className="flex justify-center gap-2">
                     {verificationCode.map((d, i) => (
