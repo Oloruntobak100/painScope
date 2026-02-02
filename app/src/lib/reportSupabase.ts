@@ -60,7 +60,7 @@ export async function persistReportAndPainsToSupabase(
 
   if (!Array.isArray(pains) || pains.length === 0) return;
 
-  for (const p of pains) {
+  const painRowBase = (p: Record<string, unknown>) => {
     const rev = (p.revenuePotential ?? p.revenue_potential) as Record<string, unknown> | undefined;
     const revRaw = rev?.raw != null ? Number(rev.raw) : (rev?.estimatedARR ?? rev?.estimated_arr != null ? Number(rev.estimatedARR ?? rev.estimated_arr) : 0);
     const painScore = Number(p.painScore ?? p.pain_score) ?? 0;
@@ -70,29 +70,40 @@ export async function persistReportAndPainsToSupabase(
       : Array.isArray(p.frequency_history)
         ? (p.frequency_history as number[])
         : [];
+    return {
+      user_id: userId,
+      name: (p.archetype ?? p.name) ?? '',
+      description: (p.description as string) ?? '',
+      pain_score: painScore,
+      severity: Number(p.severity) ?? 0,
+      frequency: Number(p.frequency) ?? 0,
+      urgency: Number(p.urgency) ?? 0,
+      competitive_saturation: Number(p.competitiveSaturation ?? p.competitive_saturation) ?? 0,
+      tam: Number(rev?.tam) ?? revRaw * 10,
+      sam: Number(rev?.sam) ?? revRaw * 2.5,
+      som: Number(rev?.som) ?? revRaw * 0.5,
+      estimated_arr: revRaw,
+      confidence: Number(rev?.confidence) ?? 0.7,
+      tags,
+      frequency_history: freqHist,
+    };
+  };
 
-    const { data: painRow, error: painErr } = await sb
-      .from('pain_archetypes')
-      .insert({
-        user_id: userId,
-        report_id: reportId,
-        name: (p.archetype ?? p.name) ?? '',
-        description: (p.description as string) ?? '',
-        pain_score: painScore,
-        severity: Number(p.severity) ?? 0,
-        frequency: Number(p.frequency) ?? 0,
-        urgency: Number(p.urgency) ?? 0,
-        competitive_saturation: Number(p.competitiveSaturation ?? p.competitive_saturation) ?? 0,
-        tam: Number(rev?.tam) ?? revRaw * 10,
-        sam: Number(rev?.sam) ?? revRaw * 2.5,
-        som: Number(rev?.som) ?? revRaw * 0.5,
-        estimated_arr: revRaw,
-        confidence: Number(rev?.confidence) ?? 0.7,
-        tags,
-        frequency_history: freqHist,
-      })
-      .select('id')
-      .single();
+  for (const p of pains) {
+    const base = painRowBase(p);
+    let painRow: { id?: string } | null = null;
+    let painErr: { code?: string; message?: string } | null = null;
+
+    const withReportId = { ...base, report_id: reportId };
+    const res = await sb.from('pain_archetypes').insert(withReportId).select('id').single();
+    painRow = res.data as { id?: string } | null;
+    painErr = res.error as { code?: string; message?: string } | null;
+
+    if (painErr && (painErr.code === '42703' || (painErr.message ?? '').includes('report_id'))) {
+      const res2 = await sb.from('pain_archetypes').insert(base).select('id').single();
+      painRow = res2.data as { id?: string } | null;
+      painErr = res2.error as { code?: string; message?: string } | null;
+    }
 
     if (painErr || !painRow?.id) {
       console.error('[PainScope] Failed to insert pain_archetype:', painErr);

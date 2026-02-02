@@ -82,7 +82,20 @@ CREATE TRIGGER on_auth_user_email_updated
   WHEN (OLD.email IS DISTINCT FROM NEW.email)
   EXECUTE PROCEDURE public.sync_profile_email();
 
--- 5. RLS: users read/update own row; admins read/update all
+-- 5. Avoid RLS recursion: is_admin() so admin policies don't read profiles again
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
+  );
+$$;
+
+-- 6. RLS: users read/update own row; admins read/update all (use is_admin() to avoid recursion)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Users can read own profile" ON public.profiles;
@@ -100,15 +113,11 @@ CREATE POLICY "Users can update own profile"
 
 CREATE POLICY "Admins can read all profiles"
   ON public.profiles FOR SELECT
-  USING (
-    (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
-  );
+  USING (public.is_admin());
 
 CREATE POLICY "Admins can update all profiles"
   ON public.profiles FOR UPDATE
-  USING (
-    (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'admin'
-  );
+  USING (public.is_admin());
 
--- 6. Grant an admin (run once; replace with your user id or uncomment next line)
+-- 7. Grant an admin (run once; replace with your user id or uncomment next line)
 UPDATE public.profiles SET role = 'admin' WHERE id = '684d52fb-e56d-4298-ae3d-fec7a9314e04';

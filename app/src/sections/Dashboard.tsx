@@ -77,16 +77,19 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
   const { user, logout } = useAuthStore();
   const { agents } = useAgentStore();
   const { pains } = usePainLibraryStore();
-  const { dashboardMetrics, recentDiscoveries, reportHistory, setReportHistory } = useBriefingStore();
+  const { dashboardMetrics, recentDiscoveries, reportHistory, setReportHistory, setDashboardFromReport } = useBriefingStore();
   const { notifications: uiNotifications, markNotificationRead, markAllNotificationsRead } = useUIStore();
 
-  // Hydrate report history from Supabase on load (so it survives refresh)
+  // Hydrate report history from Supabase on load (so it survives refresh); set metrics from latest report
   useEffect(() => {
     if (!isSupabaseConfigured() || !user?.id) return;
     loadReportHistory(user.id).then((entries) => {
-      if (entries.length > 0) setReportHistory(entries);
+      if (entries.length > 0) {
+        setReportHistory(entries);
+        setDashboardFromReport(entries[0]);
+      }
     });
-  }, [user?.id, setReportHistory]);
+  }, [user?.id, setReportHistory, setDashboardFromReport]);
 
   // Prefer webhook dashboard data when available
   useEffect(() => {

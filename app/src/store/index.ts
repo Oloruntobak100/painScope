@@ -42,6 +42,8 @@ interface BriefingStore {
   setWebhookPayload: (data: unknown) => void;
   /** Hydrate report history from Supabase (e.g. on load after refresh) */
   setReportHistory: (entries: ReportHistory[]) => void;
+  /** Set dashboard metrics and recent discoveries from a report (e.g. after loading from Supabase) */
+  setDashboardFromReport: (entry: ReportHistory) => void;
   reset: () => void;
 }
 
@@ -130,6 +132,20 @@ export const useBriefingStore = create<BriefingStore>()((set) => ({
     }));
   },
   setReportHistory: (entries) => set({ reportHistory: entries }),
+  setDashboardFromReport: (entry) => {
+    const m = entry.dashboardMetrics ?? {};
+    set({
+      dashboardMetrics: {
+        totalPainsDiscovered: m.totalPainsDiscovered ?? entry.painCount,
+        averagePainScore: m.averagePainScore ?? entry.avgPainScore,
+        sourcesAnalyzed: m.sourcesAnalyzed,
+        activeAgents: m.activeAgents,
+      },
+      recentDiscoveries: entry.topPain
+        ? [{ id: entry.id, name: entry.topPain, painScore: entry.avgPainScore, source: 'Report' }]
+        : null,
+    });
+  },
   reset: () =>
     set({
       messages: [],
