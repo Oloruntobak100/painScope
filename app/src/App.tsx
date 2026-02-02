@@ -31,7 +31,7 @@ function App() {
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(getInitialRoute);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup');
-  const { isAuthenticated, user, isPasswordRecovery } = useAuthStore();
+  const { isAuthenticated, user, isPasswordRecovery, isInitialized } = useAuthStore();
 
   useEffect(() => {
     const onHashChange = () => setCurrentRoute(getInitialRoute());
@@ -46,12 +46,12 @@ function App() {
     }
   }, [isPasswordRecovery]);
 
-  // Redirect unauthenticated users from protected routes
+  // Redirect unauthenticated users from protected routes (only after we've tried to restore session on refresh)
   useEffect(() => {
-    if (!isAuthenticated && PROTECTED_ROUTES.includes(currentRoute)) {
+    if (isInitialized && !isAuthenticated && PROTECTED_ROUTES.includes(currentRoute)) {
       setCurrentRoute('landing');
     }
-  }, [isAuthenticated, currentRoute]);
+  }, [isInitialized, isAuthenticated, currentRoute]);
 
   // Redirect non-admin users from settings
   useEffect(() => {
@@ -121,6 +121,14 @@ function App() {
   };
 
   const renderContent = () => {
+    // Wait for session restore before showing protected routes (avoids redirect flash on refresh)
+    if (!isInitialized && PROTECTED_ROUTES.includes(currentRoute)) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-background">
+          <div className="animate-pulse text-muted-foreground">Loading…</div>
+        </div>
+      );
+    }
     switch (currentRoute) {
       case 'landing':
         return (

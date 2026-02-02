@@ -26,6 +26,8 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  /** False until getSession() has completed once (so we don't redirect before restoring session on refresh) */
+  isInitialized: boolean;
   pendingVerification: string | null;
   isPasswordRecovery: boolean;
 }
@@ -75,40 +77,49 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
   user: null,
   isAuthenticated: false,
   isLoading: false,
+  isInitialized: false,
   pendingVerification: null,
   isPasswordRecovery: false,
 
   setPasswordRecovery: (value) => set({ isPasswordRecovery: value }),
 
   initAuth: () => {
-    if (!isSupabaseConfigured()) return;
+    if (!isSupabaseConfigured()) {
+      set({ isInitialized: true });
+      return;
+    }
+
+    const applySession = (session: { user: SupabaseUser } | null) => {
+      if (!session?.user) return;
+      const mappedNoProfile = () => mapSupabaseUser(session.user);
+      supabase
+        .from('profiles')
+        .select(PROFILE_SELECT)
+        .eq('id', session.user.id)
+        .single()
+        .then(({ data }) => {
+          const mapped = mapSupabaseUser(session.user, data);
+          if (mapped.isLocked) {
+            void supabase.auth.signOut();
+            set({ user: null, isAuthenticated: false });
+            return;
+          }
+          set({ user: mapped, isAuthenticated: true });
+        })
+        .then(undefined, () => {
+          const mapped = mappedNoProfile();
+          if (mapped.isLocked) {
+            void supabase.auth.signOut();
+            set({ user: null, isAuthenticated: false });
+            return;
+          }
+          set({ user: mapped, isAuthenticated: true });
+        });
+    };
 
     void supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        void supabase
-          .from('profiles')
-          .select(PROFILE_SELECT)
-          .eq('id', session.user.id)
-          .single()
-          .then(async ({ data }) => {
-            const mapped = mapSupabaseUser(session.user, data);
-            if (mapped.isLocked) {
-              await supabase.auth.signOut();
-              set({ user: null, isAuthenticated: false });
-              return;
-            }
-            set({ user: mapped, isAuthenticated: true });
-          })
-          .catch(async () => {
-            const mapped = mapSupabaseUser(session.user);
-            if (mapped.isLocked) {
-              await supabase.auth.signOut();
-              set({ user: null, isAuthenticated: false });
-              return;
-            }
-            set({ user: mapped, isAuthenticated: true });
-          });
-      }
+      applySession(session);
+      set({ isInitialized: true });
     });
 
     supabase.auth.onAuthStateChange(async (event, session) => {
