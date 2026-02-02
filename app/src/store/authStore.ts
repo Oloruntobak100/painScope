@@ -309,21 +309,33 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       return { success: false, error: 'Supabase is not configured' };
     }
     set({ isLoading: true });
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    set({ isLoading: false });
-    if (error) {
-      if (error.message.includes('Email not confirmed')) {
-        set({ pendingVerification: email });
-        return { success: false, error: 'Please verify your email' };
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        if (error.message.includes('Email not confirmed')) {
+          set({ pendingVerification: email });
+          return { success: false, error: 'Please verify your email' };
+        }
+        return { success: false, error: error.message };
       }
-      return { success: false, error: error.message };
+      if (data?.user) {
+        let profile: { name?: string; company?: string; industry?: string; avatar?: string } | null = null;
+        try {
+          const res = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
+          profile = res.data;
+        } catch {
+          // Profile fetch is best-effort; use auth user only
+        }
+        set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true });
+        return { success: true };
+      }
+      return { success: false, error: 'Login failed' };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Login failed';
+      return { success: false, error: message };
+    } finally {
+      set({ isLoading: false });
     }
-    if (data?.user) {
-      const { data: profile } = await supabase.from('profiles').select('name, company, industry, avatar').eq('id', data.user.id).single();
-      set({ user: mapSupabaseUser(data.user, profile), isAuthenticated: true });
-      return { success: true };
-    }
-    return { success: false, error: 'Login failed' };
   },
 
   loginWithOtp: async (email) => {
