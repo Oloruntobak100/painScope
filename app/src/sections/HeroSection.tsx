@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 interface HeroSectionProps {
   onGetStarted: () => void;
   onSignIn: () => void;
+  onNavigate?: (route: string) => void;
 }
 
 // Animated particle background
@@ -247,7 +248,15 @@ const DashboardPreview = () => {
   );
 };
 
-export default function HeroSection({ onGetStarted, onSignIn }: HeroSectionProps) {
+export default function HeroSection({ onGetStarted, onSignIn, onNavigate }: HeroSectionProps) {
+  // Scroll to #features or other hash when landing loads with a hash (e.g. /#features)
+  useEffect(() => {
+    const hash = window.location.hash?.replace('#', '');
+    if (hash && document.getElementById(hash)) {
+      document.getElementById(hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
+
   return (
     <section className="relative min-h-screen overflow-hidden animated-gradient-bg">
       <ParticleField />
@@ -298,8 +307,8 @@ export default function HeroSection({ onGetStarted, onSignIn }: HeroSectionProps
             
             <div className="hidden md:flex items-center gap-8">
               <a href="#features" className="text-sm text-muted-foreground hover:text-cyan transition-colors">Features</a>
-              <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-cyan transition-colors">How It Works</a>
-              <a href="#pricing" className="text-sm text-muted-foreground hover:text-cyan transition-colors">Pricing</a>
+              <button type="button" onClick={() => onNavigate?.('how-it-works')} className="text-sm text-muted-foreground hover:text-cyan transition-colors bg-transparent border-none cursor-pointer font-inherit">How It Works</button>
+              <button type="button" onClick={() => onNavigate?.('pricing')} className="text-sm text-muted-foreground hover:text-cyan transition-colors bg-transparent border-none cursor-pointer font-inherit">Pricing</button>
             </div>
             
             <div className="flex items-center gap-3">
@@ -375,12 +384,13 @@ export default function HeroSection({ onGetStarted, onSignIn }: HeroSectionProps
           {/* Dashboard Preview */}
           <DashboardPreview />
           
-          {/* Stats Bar */}
+          {/* Stats Bar (Features) */}
           <motion.div
+            id="features"
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 1.4 }}
-            className="mt-16 glass-panel rounded-xl p-6"
+            className="mt-16 glass-panel rounded-xl p-6 scroll-mt-24"
           >
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
               {[

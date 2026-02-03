@@ -148,7 +148,7 @@ function App() {
       case 'landing':
         return (
           <>
-            <HeroSection onGetStarted={handleGetStarted} onSignIn={handleSignIn} />
+            <HeroSection onGetStarted={handleGetStarted} onSignIn={handleSignIn} onNavigate={navigate} />
             <Footer onNavigate={navigate} />
           </>
         );
@@ -190,7 +190,7 @@ function App() {
       default:
         return (
           <>
-            <HeroSection onGetStarted={handleGetStarted} onSignIn={handleSignIn} />
+            <HeroSection onGetStarted={handleGetStarted} onSignIn={handleSignIn} onNavigate={navigate} />
             <Footer onNavigate={navigate} />
           </>
         );

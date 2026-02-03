@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS public.reports (
   created_at timestamptz DEFAULT now(),
   pain_count int DEFAULT 0,
   avg_pain_score numeric DEFAULT 0,
-  top_pain text,
+  top_pain text,  
   comprehensive_report text,
   dashboard_metrics jsonb DEFAULT '{}',
   structured_data jsonb DEFAULT '{}',

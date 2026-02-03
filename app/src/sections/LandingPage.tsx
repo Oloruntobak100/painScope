@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 interface LandingPageProps {
   onGetStarted: () => void;
   onSignIn: () => void;
+  onNavigate?: (route: string) => void;
 }
 
 const features = [
@@ -63,7 +64,7 @@ const steps = [
   },
 ];
 
-export default function LandingPage({ onGetStarted, onSignIn }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, onSignIn, onNavigate }: LandingPageProps) {
   return (
     <div className="min-h-screen mesh-gradient relative overflow-hidden">
       {/* Navigation */}
@@ -89,8 +90,8 @@ export default function LandingPage({ onGetStarted, onSignIn }: LandingPageProps
               transition={{ duration: 0.5, delay: 0.1 }}
             >
               <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>
-              <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">How it Works</a>
-              <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
+              <button type="button" onClick={() => onNavigate?.('how-it-works')} className="text-sm text-muted-foreground hover:text-foreground transition-colors bg-transparent border-none cursor-pointer font-inherit p-0">How it Works</button>
+              <button type="button" onClick={() => onNavigate?.('pricing')} className="text-sm text-muted-foreground hover:text-foreground transition-colors bg-transparent border-none cursor-pointer font-inherit p-0">Pricing</button>
             </motion.div>
 
             {/* CTA */}
