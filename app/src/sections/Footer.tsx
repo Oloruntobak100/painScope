@@ -4,7 +4,7 @@ interface FooterProps {
   onNavigate: (route: string) => void;
 }
 
-const supportEmail = 'support@painscope.ai';
+const supportEmail = 'support@painscope.cloud';
 
 export default function Footer({ onNavigate }: FooterProps) {
   return (

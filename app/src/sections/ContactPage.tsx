@@ -10,7 +10,7 @@ interface ContactPageProps {
   onNavigate: (route: string) => void;
 }
 
-const supportEmail = 'support@painscope.ai';
+const supportEmail = 'support@painscope.cloud';
 const salesEmail = 'sales@painscope.ai';
 
 export default function ContactPage({ onNavigate }: ContactPageProps) {
