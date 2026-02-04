@@ -16,19 +16,21 @@ import {
   Zap,
   ArrowRight,
   FileText,
+  Clock,
+  Crown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { useAuthStore } from '@/store/authStore';
+import { useAuthStore, getTrialDaysLeft, hasTrialExpired, isTrialing } from '@/store/authStore';
 import { useAgentStore, usePainLibraryStore, useBriefingStore, useUIStore } from '@/store';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { loadReportHistory } from '@/lib/reportSupabase';
 import type { Notification } from '@/store';
 
 interface DashboardProps {
-  onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings', queryParams?: Record<string, string>) => void;
+  onNavigate: (route: 'landing' | 'dashboard' | 'briefing' | 'scout' | 'library' | 'settings' | 'pricing', queryParams?: Record<string, string>) => void;
   currentRoute: string;
 }
 
@@ -154,6 +156,10 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
 
   const notifications = uiNotifications.length > 0 ? uiNotifications : mockNotifications;
   const unreadCount = notifications.filter((n) => !n.read).length;
+
+  const showTrialPaywall = hasTrialExpired(user) && user?.subscription?.plan === 'free' && user?.role !== 'admin';
+  const trialDaysLeft = getTrialDaysLeft(user);
+  const onTrial = isTrialing(user);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -390,8 +396,54 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
           </div>
         </header>
 
-        {/* Dashboard Content */}
+        {/* Trial countdown banner (only when on active trial) */}
+        {onTrial && trialDaysLeft !== null && !showTrialPaywall && (
+          <div className="mx-6 mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Clock className="w-5 h-5 text-amber-500 flex-shrink-0" />
+              <span className="text-sm font-medium text-amber-200">
+                {trialDaysLeft === 0
+                  ? "Your free trial ends today"
+                  : trialDaysLeft === 1
+                    ? "Your free trial ends in 1 day"
+                    : `Your free trial ends in ${trialDaysLeft} days`}
+              </span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onNavigate('pricing')}
+              className="border-amber-500/50 text-amber-200 hover:bg-amber-500/20"
+            >
+              Choose a plan
+            </Button>
+          </div>
+        )}
+
+        {/* Dashboard Content (or paywall when trial ended) */}
         <main className="p-6">
+          {showTrialPaywall ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-lg mx-auto">
+              <div className="w-16 h-16 rounded-2xl bg-amber-500/20 flex items-center justify-center mb-6">
+                <Clock className="w-8 h-8 text-amber-500" />
+              </div>
+              <h2 className="text-2xl font-bold mb-2">Your free trial has ended</h2>
+              <p className="text-muted-foreground mb-6">
+                Upgrade to a paid plan to keep using the dashboard and all features.
+              </p>
+              <Button
+                onClick={() => onNavigate('pricing')}
+                className="bg-lime text-background hover:bg-lime/90 px-6"
+              >
+                <Crown className="w-4 h-4 mr-2" />
+                Choose a plan
+              </Button>
+              <p className="text-xs text-muted-foreground mt-6">
+                You can still sign out or switch account from the menu above.
+              </p>
+            </div>
+          ) : (
+            <>
           {/* Welcome Section */}
           <div className="mb-8">
             <h1 className="text-2xl font-bold mb-2">
@@ -625,6 +677,8 @@ export default function Dashboard({ onNavigate, currentRoute }: DashboardProps) 
               </div>
             </motion.div>
           </div>
+            </>
+          )}
         </main>
       </div>
     </div>

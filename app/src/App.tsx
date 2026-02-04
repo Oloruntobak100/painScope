@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '@/store/authStore';
+import { supabase } from '@/lib/supabase';
 import HeroSection from '@/sections/HeroSection';
 import AuthModal from '@/sections/AuthModal';
 import HowItWorksPage from '@/sections/HowItWorksPage';
@@ -125,13 +126,45 @@ function App() {
     window.scrollTo(0, 0);
   };
 
-  const handleSubscribe = (plan: string) => {
+  const [subscribeLoading, setSubscribeLoading] = useState(false);
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
+
+  const handleSubscribe = async (plan: string, interval: 'monthly' | 'yearly' = 'yearly') => {
     if (!isAuthenticated) {
       setAuthMode('signup');
       setAuthModalOpen(true);
       return;
     }
-    alert(`Starting subscription for ${plan} plan...`);
+    if (plan === 'free') return;
+    setSubscribeError(null);
+    setSubscribeLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        setSubscribeError('Please sign in again.');
+        return;
+      }
+      const apiBase = (import.meta.env.VITE_API_URL as string) || '';
+      const res = await fetch(`${apiBase}/api/create-checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ planId: plan, interval }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSubscribeError(data.error || 'Could not start checkout.');
+        return;
+      }
+      if (data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      setSubscribeError('No checkout URL returned.');
+    } catch (e) {
+      setSubscribeError(e instanceof Error ? e.message : 'Something went wrong.');
+    } finally {
+      setSubscribeLoading(false);
+    }
   };
 
   const renderContent = () => {
@@ -162,7 +195,13 @@ function App() {
       case 'pricing':
         return (
           <>
-            <PricingPage onNavigate={navigate} onSubscribe={handleSubscribe} />
+            <PricingPage
+              onNavigate={navigate}
+              onSubscribe={handleSubscribe}
+              subscribeLoading={subscribeLoading}
+              subscribeError={subscribeError}
+              onClearSubscribeError={() => setSubscribeError(null)}
+            />
             <Footer onNavigate={navigate} />
           </>
         );

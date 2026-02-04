@@ -51,14 +51,35 @@ interface AuthStore extends AuthState {
   listUsersForAdmin: () => Promise<Array<{ id: string; email: string; name: string; company?: string; industry?: string; role: UserRole; is_locked: boolean }>>;
 }
 
-// Full profiles schema: run supabase-profiles-admin.sql once so these columns exist
-const PROFILE_SELECT = 'name, company, industry, avatar, role, email, is_locked';
+// Full profiles schema: run supabase-profiles-admin.sql + supabase-subscription.sql once
+const PROFILE_SELECT = 'name, company, industry, avatar, role, email, is_locked, subscription_plan, subscription_status, trial_ends_at';
+
+type SubscriptionPlan = 'free' | 'pro' | 'enterprise';
+type SubscriptionStatus = 'active' | 'trialing' | 'canceled';
 
 function mapSupabaseUser(
   sbUser: SupabaseUser,
-  profile?: { name?: string; company?: string; industry?: string; avatar?: string; role?: string; is_locked?: boolean; email?: string } | null
+  profile?: {
+    name?: string;
+    company?: string;
+    industry?: string;
+    avatar?: string;
+    role?: string;
+    is_locked?: boolean;
+    email?: string;
+    subscription_plan?: string | null;
+    subscription_status?: string | null;
+    trial_ends_at?: string | null;
+  } | null
 ): User {
   const role = (profile?.role === 'admin' ? 'admin' : 'user') as User['role'];
+  const plan = (profile?.subscription_plan === 'pro' || profile?.subscription_plan === 'enterprise'
+    ? profile.subscription_plan
+    : 'free') as SubscriptionPlan;
+  const status = (profile?.subscription_status === 'trialing' || profile?.subscription_status === 'canceled' || profile?.subscription_status === 'past_due'
+    ? profile.subscription_status
+    : 'active') as SubscriptionStatus;
+  const trialEndsAt = profile?.trial_ends_at ? new Date(profile.trial_ends_at) : undefined;
   return {
     id: sbUser.id,
     email: profile?.email ?? sbUser.email ?? '',
@@ -69,9 +90,31 @@ function mapSupabaseUser(
     isVerified: sbUser.email_confirmed_at != null,
     role,
     isLocked: profile?.is_locked === true,
-    subscription: { plan: 'free', status: 'active' },
+    subscription: { plan, status, trialEndsAt },
     createdAt: new Date(sbUser.created_at ?? Date.now()),
   };
+}
+
+/** Days left in trial (0 = last day/ends today). Null if not on trial or no end date. */
+export function getTrialDaysLeft(user: User | null): number | null {
+  if (!user?.subscription?.trialEndsAt || user.subscription.status !== 'trialing') return null;
+  const end = new Date(user.subscription.trialEndsAt);
+  const now = new Date();
+  const ms = end.getTime() - now.getTime();
+  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+}
+
+/** True if user was on trial and trial end date has passed. */
+export function hasTrialExpired(user: User | null): boolean {
+  if (!user?.subscription?.trialEndsAt || user.subscription.status !== 'trialing') return false;
+  return new Date(user.subscription.trialEndsAt) <= new Date();
+}
+
+/** True if user is currently in trial (status trialing and end date in future). */
+export function isTrialing(user: User | null): boolean {
+  if (!user?.subscription || user.subscription.status !== 'trialing') return false;
+  if (!user.subscription.trialEndsAt) return true;
+  return new Date(user.subscription.trialEndsAt) > new Date();
 }
 
 export const useAuthStore = create<AuthStore>()((set, get) => ({
@@ -90,9 +133,9 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
       return;
     }
 
-    type ProfileRow = { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean } | null;
+    type ProfileRow = { name?: string; company?: string; industry?: string; avatar?: string; role?: string; email?: string; is_locked?: boolean; subscription_plan?: string | null; subscription_status?: string | null; trial_ends_at?: string | null } | null;
 
-    // Use minimal columns first so role (admin) always loads even if email/is_locked columns missing
+    // Prefer full select (includes subscription); fallback to minimal if subscription columns don't exist yet
     const PROFILE_SELECT_MINIMAL = 'name, company, industry, avatar, role';
     const fetchProfileWithRetry = async (userId: string): Promise<ProfileRow> => {
       const run = async (select: string): Promise<ProfileRow> => {
@@ -100,7 +143,7 @@ export const useAuthStore = create<AuthStore>()((set, get) => ({
         return (res.data as ProfileRow) ?? null;
       };
       try {
-        return await run(PROFILE_SELECT_MINIMAL);
+        return await run(PROFILE_SELECT);
       } catch {
         await new Promise((r) => setTimeout(r, 300));
         try {

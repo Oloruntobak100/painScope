@@ -9,7 +9,10 @@ import { useAuthStore } from '@/store/authStore';
 
 interface PricingPageProps {
   onNavigate: (route: string) => void;
-  onSubscribe: (plan: string) => void;
+  onSubscribe: (plan: string, interval?: 'monthly' | 'yearly') => void | Promise<void>;
+  subscribeLoading?: boolean;
+  subscribeError?: string | null;
+  onClearSubscribeError?: () => void;
 }
 
 const plans = [
@@ -30,6 +33,7 @@ const plans = [
       { text: 'Priority Support', included: false },
     ],
     cta: 'Get Started Free',
+    trialNote: 'Free forever · No credit card required',
     popular: false,
     color: 'cyan',
   },
@@ -49,7 +53,10 @@ const plans = [
       { text: 'CRM Integrations', included: false },
       { text: 'Priority Support', included: false },
     ],
-    cta: 'Start 7-Day Free Trial',
+    ctaMonthly: 'Start 7-Day Free Trial',
+    ctaYearly: 'Subscribe to Ranger',
+    trialNoteMonthly: '7-day free trial, then $49/mo',
+    trialNoteYearly: null,
     popular: true,
     color: 'purple',
   },
@@ -70,6 +77,7 @@ const plans = [
       { text: '24/7 Priority Support', included: true },
     ],
     cta: 'Contact Sales',
+    trialNote: null,
     popular: false,
     color: 'pink',
   },
@@ -82,7 +90,15 @@ const faqs = [
   { q: 'Refund policy?', a: '30-day money-back guarantee. Contact us for a full refund.' },
 ];
 
-export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProps) {
+function getPlanCta(plan: (typeof plans)[number], isYearly: boolean): string {
+  if (plan.id === 'pro') {
+    const ranger = plan as (typeof plans)[1];
+    return (isYearly ? ranger.ctaYearly : ranger.ctaMonthly) ?? 'Subscribe';
+  }
+  return (plan as { cta: string }).cta ?? 'Get Started';
+}
+
+export default function PricingPage({ onNavigate, onSubscribe, subscribeLoading, subscribeError, onClearSubscribeError }: PricingPageProps) {
   const [isYearly, setIsYearly] = useState(true);
   const { isAuthenticated, user } = useAuthStore();
 
@@ -91,7 +107,7 @@ export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProp
       onNavigate('landing');
       return;
     }
-    onSubscribe(planId);
+    onSubscribe(planId, isYearly ? 'yearly' : 'monthly');
   };
 
   const getCurrentPlan = () => user?.subscription?.plan || 'free';
@@ -121,7 +137,7 @@ export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProp
         <div className="max-w-4xl mx-auto text-center">
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="inline-flex items-center gap-2 px-4 py-2 glass-panel rounded-full mb-8">
             <Clock className="w-4 h-4 text-cyan" />
-            <span className="text-sm text-cyan font-mono">7-DAY FREE TRIAL ON ALL PAID PLANS</span>
+            <span className="text-sm text-cyan font-mono">7-DAY FREE TRIAL ON RANGER MONTHLY</span>
           </motion.div>
           
           <motion.h1 initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="text-4xl md:text-5xl lg:text-6xl font-orbitron font-bold mb-6">
@@ -129,7 +145,7 @@ export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProp
           </motion.h1>
           
           <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="text-lg text-muted-foreground max-w-2xl mx-auto mb-10">
-            Start free, scale as you grow. All paid plans include a 7-day free trial.
+            Start free with Scout. 7-day free trial on Ranger monthly only.
           </motion.p>
           
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="flex items-center justify-center gap-4">
@@ -137,6 +153,15 @@ export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProp
             <Switch checked={isYearly} onCheckedChange={setIsYearly} />
             <span className={`text-sm ${isYearly ? 'text-cyan' : 'text-muted-foreground'}`}>Yearly <span className="text-xs text-green-400">Save 20%</span></span>
           </motion.div>
+
+          {subscribeError && (
+            <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 flex items-center justify-between gap-4">
+              <span className="text-sm text-red-200">{subscribeError}</span>
+              {onClearSubscribeError && (
+                <button type="button" onClick={onClearSubscribeError} className="text-xs text-red-300 hover:text-white underline">Dismiss</button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -166,6 +191,8 @@ export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProp
                     {plan.price.monthly > 0 && <span className="text-muted-foreground">/month</span>}
                   </div>
                   {isYearly && plan.price.yearly > 0 && <p className="text-sm text-muted-foreground mt-1">Billed annually (${plan.price.yearly * 12}/year)</p>}
+                  {plan.id === 'free' && (plan as (typeof plans)[0]).trialNote && <p className="text-xs text-cyan/90 mt-1">{(plan as (typeof plans)[0]).trialNote}</p>}
+                  {plan.id === 'pro' && !isYearly && (plan as (typeof plans)[1]).trialNoteMonthly && <p className="text-xs text-cyan/90 mt-1">{(plan as (typeof plans)[1]).trialNoteMonthly}</p>}
                 </div>
                 <div className="p-6">
                   <ul className="space-y-3">
@@ -183,8 +210,13 @@ export default function PricingPage({ onNavigate, onSubscribe }: PricingPageProp
                       <Check className="w-5 h-5 mr-2" />Current Plan
                     </Button>
                   ) : (
-                    <Button onClick={() => handleSubscribe(plan.id)} className={`w-full py-6 ${plan.popular ? 'btn-cyber-primary' : 'btn-cyber'}`}>
-                      {plan.cta}<ChevronRight className="w-5 h-5 ml-2" />
+                    <Button
+                      onClick={() => handleSubscribe(plan.id)}
+                      disabled={subscribeLoading}
+                      className={`w-full py-6 ${plan.popular ? 'btn-cyber-primary' : 'btn-cyber'}`}
+                    >
+                      {subscribeLoading ? 'Redirecting…' : getPlanCta(plan, isYearly)}
+                      {!subscribeLoading && <ChevronRight className="w-5 h-5 ml-2" />}
                     </Button>
                   )}
                 </div>
